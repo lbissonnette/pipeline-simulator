@@ -1,0 +1,11 @@
+{
+  "name": "pipeline-simulator",
+  "version": "0.1.0",
+  "description": "Interactive simulation of a streaming conversion pipeline: arrivals, bundling, a stochastic worker pool, and how backlogs form and clear.",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "start": "npx --yes http-server . -p 8080 -c-1 -o"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Simulator</title>
+<meta name="description" content="Interactive simulation of a streaming conversion pipeline: arrivals, bundling, a worker pool with a stochastic processing rate, and how backlogs form and clear.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Pipeline Simulator</h1>
+    <p class="sub">Conversions arrive, get bundled, and fan out to a worker pool. Change the rates, inject delays, watch the backlog.</p>
+  </div>
+  <div class="transport" role="group" aria-label="Simulation controls">
+    <button id="btn-play" class="btn primary" aria-pressed="false">▶ Play</button>
+    <button id="btn-step" class="btn">Step</button>
+    <button id="btn-reset" class="btn">Reset</button>
+    <label class="speed"><span>Speed</span>
+      <input id="speed" type="range" min="1" max="60" value="12" step="1">
+      <output id="speed-out">12 ticks/s</output>
+    </label>
+    <div class="tick-readout">Tick <b id="tick">0</b></div>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="controls" aria-label="Parameters">
+    <section class="panel">
+      <h2>Presets</h2>
+      <div class="preset-row">
+        <button class="chip" data-preset="healthy" title="Arrivals at ~80% of capacity">Healthy</button>
+        <button class="chip" data-preset="overloaded" title="Arrivals above capacity: backlog grows without bound">Overloaded</button>
+        <button class="chip" data-preset="slowtail" title="One in five workers runs at a quarter speed">Slow tail</button>
+        <button class="chip" data-preset="hotspots" title="Random routing to uneven workers">Hot partitions</button>
+        <button class="chip" data-preset="bursty" title="Traffic swings ±60% on a slow wave">Bursty traffic</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Incoming load</h2>
+      <label class="field">
+        <span class="lbl">Arrival rate <output data-out="arrivalRate">400</output> <small>conversions / tick</small></span>
+        <input type="range" data-param="arrivalRate" min="0" max="1500" step="10" value="400">
+      </label>
+      <label class="field">
+        <span class="lbl">Traffic wave <output data-out="waveAmplitude">0%</output> <small>± around the mean</small></span>
+        <input type="range" data-param="waveAmplitude" min="0" max="1" step="0.05" value="0">
+      </label>
+      <label class="field">
+        <span class="lbl">Bundle size <output data-out="bundleSize">25</output> <small>conversions / bundle</small></span>
+        <input type="range" data-param="bundleSize" min="1" max="200" step="1" value="25">
+      </label>
+      <label class="field">
+        <span class="lbl">Partial-bundle flush <output data-out="bundleMaxWait">2</output> <small>ticks</small></span>
+        <input type="range" data-param="bundleMaxWait" min="1" max="20" step="1" value="2">
+      </label>
+    </section>
+
+    <section class="panel">
+      <h2>Worker pool</h2>
+      <label class="field">
+        <span class="lbl">Workers <output data-out="workers">100</output></span>
+        <input type="range" data-param="workers" min="4" max="400" step="1" value="100">
+      </label>
+      <label class="field">
+        <span class="lbl">Routing</span>
+        <select data-param="routing">
+          <option value="leastLoaded">Least loaded (health-aware)</option>
+          <option value="roundRobin">Round robin</option>
+          <option value="random">Random (hash partition)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="lbl">Worker heterogeneity <output data-out="heterogeneity">0%</output> <small>permanent speed spread</small></span>
+        <input type="range" data-param="heterogeneity" min="0" max="0.8" step="0.05" value="0">
+      </label>
+    </section>
+
+    <section class="panel">
+      <h2>Processing rate per tick</h2>
+      <p class="hint">Each tick a worker completes this fraction of a bundle, drawn fresh from the distribution (clamped to 0–100%).</p>
+      <label class="field">
+        <span class="lbl">Distribution</span>
+        <select data-dist="type">
+          <option value="normal">Normal</option>
+          <option value="uniform">Uniform</option>
+          <option value="lognormal">Log-normal (heavy tail)</option>
+          <option value="bimodal">Bimodal (fast + slow mode)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="lbl">Mean <output data-out="dist.mean">20%</output></span>
+        <input type="range" data-dist="mean" min="0.01" max="1" step="0.01" value="0.2">
+      </label>
+      <label class="field">
+        <span class="lbl">Std. deviation <output data-out="dist.sd">5%</output></span>
+        <input type="range" data-dist="sd" min="0" max="0.5" step="0.005" value="0.05">
+      </label>
+      <div class="bimodal-only" hidden>
+        <label class="field">
+          <span class="lbl">Slow-mode share <output data-out="dist.slowFraction">20%</output> <small>of samples</small></span>
+          <input type="range" data-dist="slowFraction" min="0" max="1" step="0.05" value="0.2">
+        </label>
+        <label class="field">
+          <span class="lbl">Slow-mode speed <output data-out="dist.slowFactor">25%</output> <small>of the mean</small></span>
+          <input type="range" data-dist="slowFactor" min="0.05" max="1" step="0.05" value="0.25">
+        </label>
+      </div>
+      <div class="dist-preview">
+        <canvas id="dist-canvas" width="300" height="80" aria-label="Histogram of the processing-rate distribution"></canvas>
+        <div class="dist-caption"><span>0%</span><span>rate per tick</span><span>100%</span></div>
+      </div>
+      <div class="capacity-line">
+        Expected capacity <b id="capacity">500</b> conversions / tick · load ratio ρ <b id="rho">0.80</b>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Inject a delay</h2>
+      <p class="hint">Incidents start next tick and expire on their own. Stack as many as you like.</p>
+      <div class="incident">
+        <div class="inc-name">Traffic spike</div>
+        <label>× <input type="number" id="spike-mag" min="1" max="20" step="0.5" value="3"></label>
+        <label>for <input type="number" id="spike-dur" min="1" max="2000" step="1" value="30"> ticks</label>
+        <button class="btn small" data-incident="spike">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Slow workers</div>
+        <label>rate × <input type="number" id="slow-mag" min="0" max="1" step="0.05" value="0.25"></label>
+        <label>for <input type="number" id="slow-dur" min="1" max="2000" step="1" value="60"> ticks</label>
+        <button class="btn small" data-incident="slowdown">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Worker outage</div>
+        <label><input type="number" id="outage-mag" min="1" max="100" step="1" value="30">% offline</label>
+        <label>for <input type="number" id="outage-dur" min="1" max="2000" step="1" value="60"> ticks</label>
+        <button class="btn small" data-incident="outage">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Upstream delay</div>
+        <label class="wide">hold arrivals for <input type="number" id="delay-dur" min="1" max="2000" step="1" value="40"> ticks, then release</label>
+        <button class="btn small" data-incident="upstreamDelay">Fire</button>
+      </div>
+      <ul id="active-incidents" class="active-incidents" aria-live="polite"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Reproducibility</h2>
+      <label class="field inline">
+        <span class="lbl">Random seed</span>
+        <input type="number" id="seed" value="42" min="0" step="1">
+      </label>
+      <p class="hint">Reset re-runs with this seed. Same seed + same clicks = same outcome.</p>
+    </section>
+  </aside>
+
+  <section class="viz">
+    <div class="kpis">
+      <div class="tile hero">
+        <div class="label">Backlog</div>
+        <div class="value" id="kpi-backlog">0</div>
+        <div class="delta" id="kpi-backlog-delta">conversions waiting</div>
+      </div>
+      <div class="tile">
+        <div class="label">Oldest conversion age</div>
+        <div class="value" id="kpi-oldest">0</div>
+        <div class="delta">ticks in the system</div>
+      </div>
+      <div class="tile">
+        <div class="label">Latency p95</div>
+        <div class="value" id="kpi-p95">–</div>
+        <div class="delta" id="kpi-p50">p50 –</div>
+      </div>
+      <div class="tile">
+        <div class="label">Arrivals</div>
+        <div class="value" id="kpi-in">0</div>
+        <div class="delta">per tick, 20-tick avg</div>
+      </div>
+      <div class="tile">
+        <div class="label">Throughput</div>
+        <div class="value" id="kpi-out">0</div>
+        <div class="delta" id="kpi-cap">of 500 capacity</div>
+      </div>
+      <div class="tile">
+        <div class="label">Workers busy</div>
+        <div class="value" id="kpi-busy">0%</div>
+        <div class="delta" id="kpi-workers">0 idle · 0 offline</div>
+      </div>
+    </div>
+
+    <div class="card stage-card">
+      <div class="card-head">
+        <h2>Flow</h2>
+        <div class="legend">
+          <span class="lg-item"><i class="sw idle"></i>idle</span>
+          <span class="lg-item"><i class="ramp"></i><span class="ramp-lbl">1 → 32+ bundles queued</span></span>
+          <span class="lg-item"><i class="sw offline"></i>offline</span>
+          <span class="lg-item"><i class="sw prog"></i>progress on current bundle</span>
+        </div>
+      </div>
+      <div class="stage-wrap">
+        <canvas id="stage" aria-label="Pipeline flow: source, bundler, worker grid, and completed sink"></canvas>
+        <div id="stage-tooltip" class="chart-tooltip" hidden></div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <div class="card-head"><h2>Backlog over time</h2><span class="unit">conversions in the system</span></div>
+        <div class="chart-wrap"><canvas id="chart-backlog"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Arrivals vs throughput</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>arrivals</span>
+            <span class="lg-item"><i class="sw s2"></i>throughput</span>
+            <span class="lg-item"><i class="sw ref"></i>expected capacity</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-throughput"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Latency of completed bundles</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>p50</span>
+            <span class="lg-item"><i class="sw s2"></i>p95</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Worker utilisation</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>busy share</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-util"></canvas></div>
+      </div>
+    </div>
+
+    <details class="card notes">
+      <summary>How the model works</summary>
+      <ul>
+        <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a slow sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
+        <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth; a partial bundle is flushed after the configured wait so nothing sits forever at low traffic.</li>
+        <li><b>Routing</b> sends each bundle to one worker. <i>Least loaded</i> picks the online worker with the fewest queued conversions (a health-aware balancer). <i>Round robin</i> and <i>random</i> keep sending to offline workers, like a static partition assignment would.</li>
+        <li><b>Processing</b>: each tick every online worker draws a rate from the distribution, multiplies it by its permanent speed factor, and completes that fraction of a bundle's worth of conversions from the front of its queue. Spare capacity spills into the next bundle. Rates are clamped to 0–100% per tick.</li>
+        <li><b>Capacity</b> is workers × mean rate × bundle size. When the load ratio ρ (arrivals ÷ capacity) is above 1 the backlog grows without bound; below 1 it stays bounded, but latency climbs steeply as ρ approaches 1.</li>
+        <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished.</li>
+      </ul>
+    </details>
+  </section>
+</main>
+
+<script src="js/sim.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
