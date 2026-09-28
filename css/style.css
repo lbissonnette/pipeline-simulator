@@ -150,8 +150,8 @@ button, input, select { font: inherit; color: inherit; }
 .active-incidents button:hover { color: var(--text); }
 
 .viz { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-.kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
-@media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1300px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .tile {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
@@ -183,6 +183,7 @@ button, input, select { font: inherit; color: inherit; }
 #stage { width: 100%; height: 460px; display: block; }
 @media (max-width: 960px) { #stage { height: 420px; } }
 .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.charts .card:last-child:nth-child(odd) { grid-column: 1 / -1; }
 @media (max-width: 1200px) { .charts { grid-template-columns: 1fr; } }
 .chart-wrap { position: relative; }
 .chart-wrap canvas { width: 100%; height: 200px; display: block; }
@@ -203,3 +204,10 @@ button, input, select { font: inherit; color: inherit; }
 .notes ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); }
 .notes li { margin: 4px 0; }
 .notes b { color: var(--text); }
+
+details.advanced summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.advanced summary::-webkit-details-marker { display: none; }
+details.advanced summary::before { content: "▸"; color: var(--text-muted); font-size: 12px; }
+details.advanced[open] summary::before { content: "▾"; }
+details.advanced summary h2 { display: inline; }
+.tile .value.warn { color: var(--critical); }

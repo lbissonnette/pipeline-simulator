@@ -1,7 +1,7 @@
 /* UI wiring, stage rendering (worker grid + flow particles), KPIs and charts. */
 (function () {
   'use strict';
-  const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, queuedItems } = PipelineSim;
+  const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
 
   const $ = sel => document.querySelector(sel);
   const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -18,12 +18,14 @@
   let ramp = [];
   let hoveredWorker = null;
 
+  const BASE = { waveAmplitude: 0, bundleSize: 10000, bundleMaxWait: 2, workers: 100, dispatcherCapacity: 10, routing: 'idle', heterogeneity: 0 };
+  const NORMAL = { type: 'normal', mean: 0.2, sd: 0.05 };
   const PRESETS = {
-    healthy:    { arrivalRate: 400, waveAmplitude: 0, bundleSize: 25, workers: 100, routing: 'leastLoaded', heterogeneity: 0, dist: { type: 'normal', mean: 0.2, sd: 0.05 } },
-    overloaded: { arrivalRate: 600, waveAmplitude: 0, bundleSize: 25, workers: 100, routing: 'leastLoaded', heterogeneity: 0, dist: { type: 'normal', mean: 0.2, sd: 0.05 } },
-    slowtail:   { arrivalRate: 400, waveAmplitude: 0, bundleSize: 25, workers: 100, routing: 'leastLoaded', heterogeneity: 0, dist: { type: 'bimodal', mean: 0.2, sd: 0.04, slowFraction: 0.2, slowFactor: 0.25 } },
-    hotspots:   { arrivalRate: 380, waveAmplitude: 0, bundleSize: 25, workers: 100, routing: 'random', heterogeneity: 0.4, dist: { type: 'normal', mean: 0.2, sd: 0.05 } },
-    bursty:     { arrivalRate: 400, waveAmplitude: 0.6, bundleSize: 25, workers: 100, routing: 'leastLoaded', heterogeneity: 0, dist: { type: 'normal', mean: 0.2, sd: 0.05 } },
+    healthy:    Object.assign({}, BASE, { arrivalRate: 150000, dist: NORMAL }),
+    overloaded: Object.assign({}, BASE, { arrivalRate: 220000, dist: NORMAL }),
+    slowtail:   Object.assign({}, BASE, { arrivalRate: 150000, dist: { type: 'bimodal', mean: 0.2, sd: 0.04, slowFraction: 0.2, slowFactor: 0.25 } }),
+    hotspots:   Object.assign({}, BASE, { arrivalRate: 140000, routing: 'sticky', heterogeneity: 0.4, dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 150000, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------
@@ -32,6 +34,8 @@
       case 'waveAmplitude': case 'heterogeneity':
       case 'dist.mean': case 'dist.sd': case 'dist.slowFraction': case 'dist.slowFactor':
         return Math.round(v * 100) + '%';
+      case 'arrivalRate': case 'bundleSize':
+        return fmt(v);
       default: return String(v);
     }
   }
@@ -56,6 +60,7 @@
     }
     partial.dist = dist;
     sim.update(partial);
+    $('#arrival-bundles').textContent = (partial.arrivalRate / partial.bundleSize).toFixed(1).replace(/\.0$/, '');
     $('.bimodal-only').hidden = dist.type !== 'bimodal';
     drawDistribution();
     updateCapacity();
@@ -188,7 +193,9 @@
   }
 
   function updateCapacity() {
-    const cap = sim.workers.length * expectedRate(sim.config.dist) * sim.config.bundleSize;
+    const ticks = expectedBundleTicks(sim.config.dist);
+    const cap = (sim.workers.length * sim.config.bundleSize) / ticks;
+    $('#bundle-ticks').textContent = ticks.toFixed(1);
     $('#capacity').textContent = fmt(cap);
     const rho = sim.config.arrivalRate / Math.max(1e-9, cap);
     const rhoEl = $('#rho');
@@ -223,7 +230,7 @@
   const sctx = stage.getContext('2d');
   const tooltip = $('#stage-tooltip');
   let geom = null;
-  const NODE_R = 34;
+  let NODE_R = 34;
 
   function computeGeometry() {
     const dpr = window.devicePixelRatio || 1;
@@ -238,7 +245,7 @@
     const narrow = W < 640;
     const sideW = narrow ? 0 : 150;
     const pad = 12;
-    const gridX = sideW + pad, gridY = narrow ? 84 : pad;
+    const gridX = sideW + pad, gridY = narrow ? 80 : pad;
     const gridW = W - sideW * 2 - pad * 2, gridH = H - gridY - pad;
     const gap = n > 200 ? 2 : 3;
     const cell = Math.floor(Math.min((gridW - gap * (cols - 1)) / cols, (gridH - gap * (rows - 1)) / rows));
@@ -246,9 +253,10 @@
     const ox = gridX + (gridW - usedW) / 2, oy = gridY + (gridH - usedH) / 2;
     geom = {
       dpr, W, H, cols, rows, cell, gap, ox, oy, narrow, sideW,
-      source: narrow ? { x: W * 0.18, y: 40 } : { x: sideW / 2, y: H * 0.22 },
-      bundler: narrow ? { x: W * 0.5, y: 40 } : { x: sideW / 2, y: H * 0.62 },
-      sink: narrow ? { x: W * 0.82, y: 40 } : { x: W - sideW / 2, y: H * 0.5 },
+      source: narrow ? { x: W * 0.14, y: 38 } : { x: sideW / 2, y: H * 0.15 },
+      bundler: narrow ? { x: W * 0.38, y: 38 } : { x: sideW / 2, y: H * 0.5 },
+      dispatcher: narrow ? { x: W * 0.62, y: 38 } : { x: sideW / 2, y: H * 0.85 },
+      sink: narrow ? { x: W * 0.86, y: 38 } : { x: W - sideW / 2, y: H * 0.5 },
     };
     return geom;
   }
@@ -263,34 +271,43 @@
     if (!geom) return;
     const now = performance.now();
     const dur = Math.max(160, Math.min(600, 900 / Math.max(1, ticksPerSecond / 6)));
-    // dispatches: sample so the stage stays legible at high rates
-    const dispatches = events.filter(e => e.type === 'dispatch');
-    const keep = Math.min(dispatches.length, 24);
-    for (let i = 0; i < keep; i++) {
-      const e = dispatches[Math.floor((i / keep) * dispatches.length)];
+    const g = geom, R = NODE_R;
+    const edge = (node, dir) => g.narrow
+      ? { x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0), y: node.y + (dir === 'down' ? R : 0) }
+      : { x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0), y: node.y + (dir === 'down' ? R : dir === 'up' ? -R : 0) };
+    const sample = (list, max) => {
+      const keep = Math.min(list.length, max), out = [];
+      for (let i = 0; i < keep; i++) out.push(list[Math.floor((i / keep) * list.length)]);
+      return out;
+    };
+    // bundler -> dispatcher
+    for (const [i, e] of sample(events.filter(e => e.type === 'bundle'), 12).entries()) {
+      const from = g.narrow ? edge(g.bundler, 'out') : edge(g.bundler, 'down');
+      const to = g.narrow ? edge(g.dispatcher, 'in') : edge(g.dispatcher, 'up');
+      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 12, dur: dur * 0.6, kind: 'in' });
+    }
+    // dispatcher -> worker
+    for (const [i, e] of sample(events.filter(e => e.type === 'dispatch'), 24).entries()) {
       const to = cellCenter(e.worker);
-      const from = geom.narrow ? { x: geom.bundler.x, y: geom.bundler.y + NODE_R } : { x: geom.bundler.x + NODE_R, y: geom.bundler.y };
-      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now, dur, kind: 'in' });
+      const from = g.narrow ? edge(g.dispatcher, 'down') : edge(g.dispatcher, 'out');
+      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 8, dur, kind: 'in' });
     }
-    // completions: one particle per completed bundle, from a random busy worker (approximation for the eye)
-    const done = Math.min(snap.completedBundles, 16);
-    for (let i = 0; i < done; i++) {
-      const w = sim.workers[Math.floor(Math.random() * sim.workers.length)];
-      const from = cellCenter(w.id);
-      const to = geom.narrow ? { x: geom.sink.x, y: geom.sink.y + NODE_R } : { x: geom.sink.x - NODE_R, y: geom.sink.y };
-      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 15, dur, kind: 'out' });
+    // worker -> done
+    for (const [i, e] of sample(events.filter(e => e.type === 'complete'), 24).entries()) {
+      const from = cellCenter(e.worker);
+      const to = g.narrow ? edge(g.sink, 'down') : edge(g.sink, 'in');
+      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 10, dur, kind: 'out' });
     }
-    // arrivals: a few dots from source to bundler
+    // source -> bundler (a few dots per tick, scaled by arrivals)
     const arr = Math.min(6, Math.round(snap.arrivals / Math.max(1, sim.config.bundleSize)));
     for (let i = 0; i < arr; i++) {
-      const s = geom.source, b = geom.bundler;
       let from, to;
       if (snap.heldItems > 0) {
-        from = { x: s.x, y: s.y - NODE_R - 26 }; to = { x: s.x, y: s.y - NODE_R };
-      } else if (geom.narrow) {
-        from = { x: s.x + NODE_R, y: s.y }; to = { x: b.x - NODE_R, y: b.y };
+        from = { x: g.source.x, y: g.source.y - R - 26 }; to = { x: g.source.x, y: g.source.y - R };
+      } else if (g.narrow) {
+        from = edge(g.source, 'out'); to = edge(g.bundler, 'in');
       } else {
-        from = { x: s.x, y: s.y + NODE_R }; to = { x: b.x, y: b.y - NODE_R };
+        from = edge(g.source, 'down'); to = edge(g.bundler, 'up');
       }
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 20, dur: dur * 0.8, kind: 'arr' });
     }
@@ -301,11 +318,12 @@
     ramp = cssVar('--ramp').split(',').map(s => s.trim());
   }
 
-  function cellColor(items) {
-    if (items <= 0) return cssVar('--cell-idle');
-    const d = items / sim.config.bundleSize; // depth in bundles
-    const idx = Math.min(ramp.length - 1, Math.round((Math.log2(1 + d) / Math.log2(33)) * (ramp.length - 1)));
-    return ramp[Math.max(0, idx)];
+  function cellColor(w) {
+    if (!w.bundle) return cssVar('--cell-idle');
+    const age = sim.tick - w.bundle.dispatchedTick;
+    const expected = expectedBundleTicks(sim.config.dist);
+    const ratio = Math.min(1, age / (4 * expected)); // darkest at 4x the expected time
+    return ramp[Math.round(ratio * (ramp.length - 1))];
   }
 
   function drawNode(ctx, x, y, r, title, lines, fillColor) {
@@ -332,6 +350,7 @@
 
   function drawStage() {
     const g = computeGeometry();
+    NODE_R = g.narrow ? 28 : 34;
     const ctx = sctx;
     ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
     ctx.clearRect(0, 0, g.W, g.H);
@@ -344,17 +363,29 @@
     const r = NODE_R;
     if (!g.narrow) {
       drawArrow(ctx, g.source.x, g.source.y + r, g.bundler.x, g.bundler.y - r);
-      drawArrow(ctx, g.bundler.x + r, g.bundler.y, gridLeft - 6, gridMidY);
+      drawArrow(ctx, g.bundler.x, g.bundler.y + r, g.dispatcher.x, g.dispatcher.y - r);
+      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, gridLeft - 6, gridMidY);
       drawArrow(ctx, gridRight + 6, gridMidY, g.sink.x - r, g.sink.y);
     } else {
       drawArrow(ctx, g.source.x + r, g.source.y, g.bundler.x - r, g.bundler.y);
-      drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.sink.x - r, g.sink.y);
+      drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.dispatcher.x - r, g.dispatcher.y);
+      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.sink.x - r, g.sink.y);
     }
     const holding = snap.heldItems > 0;
+    const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
     drawNode(ctx, g.source.x, g.source.y, r, 'Source',
       holding ? [`holding ${fmt(snap.heldItems)}`, 'delayed'] : [`${fmt(snap.arrivals)} / tick`],
       holding ? cssVar('--surface-2') : surface);
-    drawNode(ctx, g.bundler.x, g.bundler.y, r, 'Bundler', [`${fmt(snap.intakeItems)} buffered`, `${snap.dispatched} sent`], surface);
+    drawNode(ctx, g.bundler.x, g.bundler.y, r, 'Bundler',
+      [`${fmt(snap.intakeItems)} held`, full ? 'blocked' : `${snap.cut} cut`],
+      full && snap.intakeItems >= sim.config.bundleSize ? cssVar('--surface-2') : surface);
+    drawNode(ctx, g.dispatcher.x, g.dispatcher.y, r, g.narrow ? 'Dispatch' : 'Dispatcher',
+      [`${snap.dispatcherQueued} / ${snap.dispatcherCapacity} queued`, `${snap.dispatched} sent`],
+      full ? cssVar('--surface-2') : surface);
+    if (full) {
+      ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = cssVar('--critical'); ctx.stroke();
+    }
     drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.processed)} total`, `${fmt(snap.processed)} / tick`], surface);
 
     // worker grid
@@ -365,9 +396,8 @@
       const c = i % g.cols, rr = Math.floor(i / g.cols);
       const x = g.ox + c * (cell + g.gap), y = g.oy + rr * (cell + g.gap);
       const offline = w.offlineUntil >= sim.tick;
-      const items = queuedItems(w);
       ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad);
-      ctx.fillStyle = offline ? offlineFill : cellColor(items);
+      ctx.fillStyle = offline ? offlineFill : cellColor(w);
       ctx.fill();
       if (offline) {
         ctx.save(); ctx.clip();
@@ -376,8 +406,9 @@
           ctx.beginPath(); ctx.moveTo(x + d, y + cell); ctx.lineTo(x + d + cell, y); ctx.stroke();
         }
         ctx.restore();
-      } else if (w.queue.length && cell >= 10) {
-        const b = w.queue[0];
+      }
+      if (w.bundle && cell >= 10) {
+        const b = w.bundle;
         const p = 1 - b.remaining / b.size;
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -434,14 +465,13 @@
     if (idx === null) { tooltip.hidden = true; return; }
     const w = sim.workers[idx];
     const offline = w.offlineUntil >= sim.tick;
-    const items = queuedItems(w);
-    const head = w.queue[0];
-    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : ''}</div>` +
-      `<div class="tt-row"><span>Queued</span><b>${w.queue.length} bundles · ${fmt(items)} conv.</b></div>` +
-      (head ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - head.remaining / head.size))}% done · age ${sim.tick - head.createdTick}t</b></div>` : '') +
+    const b = w.bundle;
+    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : b ? '' : ' · idle'}</div>` +
+      (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
+           `<div class="tt-row"><span>Working for</span><b>${sim.tick - b.dispatchedTick}t · conversions aged ${sim.tick - b.createdTick}t</b></div>` : '') +
       `<div class="tt-row"><span>Last tick rate</span><b>${Math.round(w.lastRate * 100)}% of a bundle</b></div>` +
       `<div class="tt-row"><span>Speed factor</span><b>×${w.speed.toFixed(2)}</b></div>` +
-      `<div class="tt-row"><span>Processed</span><b>${fmt(w.processed)}</b></div>`;
+      `<div class="tt-row"><span>Completed</span><b>${w.completed} bundles · ${fmt(w.processed)} conv.</b></div>`;
     tooltip.hidden = false;
     const tw = tooltip.offsetWidth;
     tooltip.style.left = (x + 16 + tw > rect.width ? x - tw - 12 : x + 16) + 'px';
@@ -457,6 +487,10 @@
       reference: { key: 'nominalCapacity', name: 'Expected capacity' },
     }),
     latency: new LineChart($('#chart-latency'), { series: [{ key: 'latencyP50', name: 'p50', color: '--s1' }, { key: 'latencyP95', name: 'p95', color: '--s2' }] }),
+    dispatcher: new LineChart($('#chart-dispatcher'), {
+      series: [{ key: 'dispatcherQueued', name: 'Bundles waiting', color: '--s1' }], fill: true,
+      reference: { key: 'dispatcherCapacity', name: 'Capacity' },
+    }),
     util: new LineChart($('#chart-util'), { series: [{ key: 'utilPct', name: 'Busy share', color: '--s1' }], fill: true }),
   };
 
@@ -484,7 +518,7 @@
     const deltaEl = $('#kpi-backlog-delta');
     if (h.length < 5) { deltaEl.textContent = 'conversions waiting'; deltaEl.className = 'delta'; }
     else {
-      deltaEl.textContent = `${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d))} vs 60 ticks ago`;
+      deltaEl.textContent = `${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d))} in 60 ticks`;
       deltaEl.className = 'delta ' + (d > 50 ? 'up' : d < -50 ? 'down' : '');
     }
     $('#kpi-oldest').textContent = fmt(snap.oldestAge);
@@ -494,10 +528,16 @@
     const mx = a => a.length ? Math.max(...a) : null;
     const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
     $('#kpi-p95').textContent = p95s.length ? fmt(mx(p95s)) + 't' : '–';
-    $('#kpi-p50').textContent = p50s.length ? `p50 ${fmt(med(p50s))}t · last 20 ticks` : 'no bundles completed yet';
+    $('#kpi-p50').textContent = p50s.length ? `p50 ${fmt(med(p50s))}t · 20-tick window` : 'nothing completed yet';
     $('#kpi-in').textContent = fmt(avg('arrivals'));
     $('#kpi-out').textContent = fmt(avg('processed'));
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
+    const dq = $('#kpi-dispatcher');
+    dq.textContent = `${snap.dispatcherQueued} / ${snap.dispatcherCapacity}`;
+    dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);
+    $('#kpi-upstream').textContent = snap.heldItems > 0
+      ? `${fmt(snap.intakeItems)} at bundler · ${fmt(snap.heldItems)} upstream`
+      : `${fmt(snap.intakeItems)} waiting at bundler`;
     $('#kpi-workers').textContent = `${snap.idle} idle · ${snap.offline} offline`;
   }
 

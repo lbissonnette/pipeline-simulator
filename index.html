@@ -41,36 +41,38 @@
     <section class="panel">
       <h2>Incoming load</h2>
       <label class="field">
-        <span class="lbl">Arrival rate <output data-out="arrivalRate">400</output> <small>conversions / tick</small></span>
-        <input type="range" data-param="arrivalRate" min="0" max="1500" step="10" value="400">
+        <span class="lbl">Arrival rate <output data-out="arrivalRate">160K</output> <small>conversions / tick · <span id="arrival-bundles">16</span> bundles / tick</small></span>
+        <input type="range" data-param="arrivalRate" min="0" max="600000" step="2000" value="160000">
       </label>
       <label class="field">
         <span class="lbl">Traffic wave <output data-out="waveAmplitude">0%</output> <small>± around the mean</small></span>
         <input type="range" data-param="waveAmplitude" min="0" max="1" step="0.05" value="0">
       </label>
+    </section>
+
+    <section class="panel">
+      <h2>Dispatcher</h2>
+      <p class="hint">Bundles wait here for an idle worker. When the queue is full the bundler stops cutting bundles and conversions pile up upstream.</p>
       <label class="field">
-        <span class="lbl">Bundle size <output data-out="bundleSize">25</output> <small>conversions / bundle</small></span>
-        <input type="range" data-param="bundleSize" min="1" max="200" step="1" value="25">
+        <span class="lbl">Queue capacity <output data-out="dispatcherCapacity">10</output> <small>bundles</small></span>
+        <input type="range" data-param="dispatcherCapacity" min="1" max="100" step="1" value="10">
       </label>
       <label class="field">
-        <span class="lbl">Partial-bundle flush <output data-out="bundleMaxWait">2</output> <small>ticks</small></span>
-        <input type="range" data-param="bundleMaxWait" min="1" max="20" step="1" value="2">
+        <span class="lbl">Routing</span>
+        <select data-param="routing">
+          <option value="idle">Any idle worker</option>
+          <option value="roundRobin">Round robin over idle workers</option>
+          <option value="sticky">Sticky partition (bundle waits for its worker)</option>
+        </select>
       </label>
     </section>
 
     <section class="panel">
       <h2>Worker pool</h2>
+      <p class="hint">Each worker holds one bundle at a time and takes the next only once it is finished.</p>
       <label class="field">
         <span class="lbl">Workers <output data-out="workers">100</output></span>
         <input type="range" data-param="workers" min="4" max="400" step="1" value="100">
-      </label>
-      <label class="field">
-        <span class="lbl">Routing</span>
-        <select data-param="routing">
-          <option value="leastLoaded">Least loaded (health-aware)</option>
-          <option value="roundRobin">Round robin</option>
-          <option value="random">Random (hash partition)</option>
-        </select>
       </label>
       <label class="field">
         <span class="lbl">Worker heterogeneity <output data-out="heterogeneity">0%</output> <small>permanent speed spread</small></span>
@@ -113,7 +115,7 @@
         <div class="dist-caption"><span>0%</span><span>rate per tick</span><span>100%</span></div>
       </div>
       <div class="capacity-line">
-        Expected capacity <b id="capacity">500</b> conversions / tick · load ratio ρ <b id="rho">0.80</b>
+        A bundle takes <b id="bundle-ticks">5.5</b> ticks on average · capacity <b id="capacity">180K</b> conversions / tick · load ratio ρ <b id="rho">0.88</b>
       </div>
     </section>
 
@@ -146,14 +148,22 @@
       <ul id="active-incidents" class="active-incidents" aria-live="polite"></ul>
     </section>
 
-    <section class="panel">
-      <h2>Reproducibility</h2>
+    <details class="panel advanced">
+      <summary><h2>Advanced</h2></summary>
+      <label class="field">
+        <span class="lbl">Bundle size <output data-out="bundleSize">10K</output> <small>conversions / bundle</small></span>
+        <input type="range" data-param="bundleSize" min="100" max="50000" step="100" value="10000">
+      </label>
+      <label class="field">
+        <span class="lbl">Partial-bundle flush <output data-out="bundleMaxWait">2</output> <small>ticks</small></span>
+        <input type="range" data-param="bundleMaxWait" min="1" max="20" step="1" value="2">
+      </label>
       <label class="field inline">
         <span class="lbl">Random seed</span>
         <input type="number" id="seed" value="42" min="0" step="1">
       </label>
       <p class="hint">Reset re-runs with this seed. Same seed + same clicks = same outcome.</p>
-    </section>
+    </details>
   </aside>
 
   <section class="viz">
@@ -164,7 +174,7 @@
         <div class="delta" id="kpi-backlog-delta">conversions waiting</div>
       </div>
       <div class="tile">
-        <div class="label">Oldest conversion age</div>
+        <div class="label">Oldest conversion</div>
         <div class="value" id="kpi-oldest">0</div>
         <div class="delta">ticks in the system</div>
       </div>
@@ -181,7 +191,12 @@
       <div class="tile">
         <div class="label">Throughput</div>
         <div class="value" id="kpi-out">0</div>
-        <div class="delta" id="kpi-cap">of 500 capacity</div>
+        <div class="delta" id="kpi-cap">of 180K capacity</div>
+      </div>
+      <div class="tile">
+        <div class="label">Dispatcher queue</div>
+        <div class="value" id="kpi-dispatcher">0 / 10</div>
+        <div class="delta" id="kpi-upstream">bundler holding 0</div>
       </div>
       <div class="tile">
         <div class="label">Workers busy</div>
@@ -195,13 +210,13 @@
         <h2>Flow</h2>
         <div class="legend">
           <span class="lg-item"><i class="sw idle"></i>idle</span>
-          <span class="lg-item"><i class="ramp"></i><span class="ramp-lbl">1 → 32+ bundles queued</span></span>
+          <span class="lg-item"><i class="ramp"></i><span class="ramp-lbl">working: fresh → 4× the expected bundle time</span></span>
           <span class="lg-item"><i class="sw offline"></i>offline</span>
           <span class="lg-item"><i class="sw prog"></i>progress on current bundle</span>
         </div>
       </div>
       <div class="stage-wrap">
-        <canvas id="stage" aria-label="Pipeline flow: source, bundler, worker grid, and completed sink"></canvas>
+        <canvas id="stage" aria-label="Pipeline flow: source, bundler, dispatcher, worker grid, and completed sink"></canvas>
         <div id="stage-tooltip" class="chart-tooltip" hidden></div>
       </div>
     </div>
@@ -231,6 +246,15 @@
         <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
       </div>
       <div class="card">
+        <div class="card-head"><h2>Dispatcher queue</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>bundles waiting</span>
+            <span class="lg-item"><i class="sw ref"></i>capacity</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-dispatcher"></canvas></div>
+      </div>
+      <div class="card">
         <div class="card-head"><h2>Worker utilisation</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>busy share</span>
@@ -244,11 +268,11 @@
       <summary>How the model works</summary>
       <ul>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a slow sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
-        <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth; a partial bundle is flushed after the configured wait so nothing sits forever at low traffic.</li>
-        <li><b>Routing</b> sends each bundle to one worker. <i>Least loaded</i> picks the online worker with the fewest queued conversions (a health-aware balancer). <i>Round robin</i> and <i>random</i> keep sending to offline workers, like a static partition assignment would.</li>
-        <li><b>Processing</b>: each tick every online worker draws a rate from the distribution, multiplies it by its permanent speed factor, and completes that fraction of a bundle's worth of conversions from the front of its queue. Spare capacity spills into the next bundle. Rates are clamped to 0–100% per tick.</li>
-        <li><b>Capacity</b> is workers × mean rate × bundle size. When the load ratio ρ (arrivals ÷ capacity) is above 1 the backlog grows without bound; below 1 it stays bounded, but latency climbs steeply as ρ approaches 1.</li>
-        <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished.</li>
+        <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
+        <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment.</li>
+        <li><b>Processing</b>: each worker holds one bundle. Every tick it draws a rate from the distribution, multiplies by its permanent speed factor and any slowdown, clamps to 0–100%, and completes that fraction of a bundle. When the bundle is done the worker idles for the rest of the tick and takes the next bundle on the following tick.</li>
+        <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle. The expected ticks are estimated by simulation, so they include the leftover capacity wasted at the end of each bundle. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
+        <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent waiting at the bundler and in the dispatcher.</li>
       </ul>
     </details>
   </section>

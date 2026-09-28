@@ -1,10 +1,14 @@
 /*
  * Pipeline simulator — pure model, no DOM.
  *
- * Conversions arrive each tick, are bundled, and dispatched to a pool of
- * workers. Every tick each worker draws a processing rate from a configurable
- * distribution and completes that fraction of a bundle's worth of items from
- * the front of its queue (spilling into the next bundle if it finishes one).
+ * Conversions arrive each tick and are cut into bundles by the bundler. The
+ * bundler hands bundles to a dispatcher with a bounded queue; when the queue
+ * is full the bundler stops cutting (back-pressure) and conversions pile up
+ * in its intake buffer. The dispatcher hands each bundle to an idle worker.
+ * Workers hold exactly one bundle at a time; every tick a worker draws a
+ * processing rate from a configurable distribution and completes that
+ * fraction of a bundle. When it finishes, it becomes idle and can take the
+ * next bundle on the following tick.
  *
  * Loaded as a plain <script> in the browser (global `PipelineSim`) and via
  * require() in Node for tests.
@@ -45,7 +49,6 @@
     function poisson(lambda) {
       if (lambda <= 0) return 0;
       if (lambda > 60) {
-        // normal approximation for large means
         return Math.max(0, Math.round(lambda + Math.sqrt(lambda) * gaussian()));
       }
       const L = Math.exp(-lambda);
@@ -58,8 +61,6 @@
   }
 
   // ---------- processing-rate distributions ----------
-  // Every distribution is parameterised by a mean and sd (fraction of a bundle
-  // per tick) so the same two sliders drive all of them.
   const DISTRIBUTIONS = {
     normal: {
       label: 'Normal',
@@ -95,11 +96,10 @@
   function sampleRate(rng, dist) {
     const impl = DISTRIBUTIONS[dist.type] || DISTRIBUTIONS.normal;
     const r = impl.sample(rng, dist);
-    // A worker cannot do negative work, nor more than one full bundle per tick.
     return r < 0 ? 0 : r > 1 ? 1 : r;
   }
 
-  // Expected rate after clamping, estimated by sampling (cheap and exact enough).
+  // Mean clamped rate, by sampling.
   function expectedRate(dist, seed) {
     const rng = makeRng(seed || 12345);
     const n = 4000;
@@ -108,15 +108,31 @@
     return sum / n;
   }
 
+  // Expected ticks a worker needs to finish one bundle. Because a worker
+  // finishes a bundle mid-tick and idles for the rest of it, this is a little
+  // more than 1 / mean rate; Monte Carlo gets it right for any distribution.
+  function expectedBundleTicks(dist, seed) {
+    const rng = makeRng(seed || 777);
+    const bundles = 3000;
+    let ticks = 0;
+    for (let i = 0; i < bundles; i++) {
+      let done = 0, t = 0;
+      while (done < 1 && t < 10000) { done += sampleRate(rng, dist); t++; }
+      ticks += t;
+    }
+    return ticks / bundles;
+  }
+
   // ---------- defaults ----------
   const DEFAULTS = {
     workers: 100,
-    arrivalRate: 400,          // mean conversions per tick (Poisson)
-    waveAmplitude: 0,          // 0..1 diurnal-style modulation of arrivals
+    arrivalRate: 160000,       // mean conversions per tick (Poisson)
+    waveAmplitude: 0,          // 0..1 modulation of arrivals
     wavePeriod: 300,           // ticks per wave
-    bundleSize: 25,            // conversions per bundle
+    bundleSize: 10000,         // conversions per bundle
     bundleMaxWait: 2,          // flush a partial bundle after this many ticks
-    routing: 'leastLoaded',    // leastLoaded | roundRobin | random
+    dispatcherCapacity: 10,    // bundles the dispatcher can hold
+    routing: 'idle',           // idle | roundRobin | sticky
     dist: { type: 'normal', mean: 0.2, sd: 0.05, slowFraction: 0.2, slowFactor: 0.25 },
     heterogeneity: 0,          // sd of per-worker permanent speed multiplier
     historyLength: 900,
@@ -124,9 +140,9 @@
   };
 
   const ROUTING = {
-    leastLoaded: 'Least loaded (health-aware)',
-    roundRobin: 'Round robin',
-    random: 'Random (hash partition)',
+    idle: 'Any idle worker',
+    roundRobin: 'Round robin over idle workers',
+    sticky: 'Sticky partition (bundle waits for its worker)',
   };
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -147,11 +163,12 @@
       this.rrCursor = 0;
       this.intake = { items: 0, oldestTick: null };
       this.held = { items: 0, oldestTick: null };   // upstream-delay holding area
+      this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
       this.nextIncidentId = 1;
-      this.totals = { arrived: 0, processed: 0, bundlesDispatched: 0, bundlesCompleted: 0 };
+      this.totals = { arrived: 0, processed: 0, bundlesCut: 0, bundlesDispatched: 0, bundlesCompleted: 0 };
       this.history = [];
-      this.events = [];   // per-tick dispatch events for the renderer
+      this.events = [];
       this.workers = [];
       this.applyWorkerCount(this.config.workers, true);
       this.last = this.snapshot(0, 0, 0, 0, []);
@@ -159,15 +176,21 @@
 
     applyWorkerCount(n, fresh) {
       const ws = this.workers;
-      while (ws.length > n) ws.pop();
+      while (ws.length > n) {
+        const w = ws.pop();
+        if (w.bundle) this.dispatcher.unshift(w.bundle); // hand its work back
+      }
       while (ws.length < n) {
         ws.push({
-          id: ws.length, queue: [], speed: 1, offlineUntil: -1,
-          lastRate: 0, lastWorked: 0, processed: 0,
+          id: ws.length, bundle: null, speed: 1, offlineUntil: -1,
+          lastRate: 0, lastWorked: 0, processed: 0, completed: 0,
         });
       }
       if (fresh) this.regenerateSpeeds();
       this.config.workers = n;
+      if (this.config.routing === 'sticky') {
+        for (const b of this.dispatcher) if (b.worker >= n) b.worker = this.rng.int(n);
+      }
     }
 
     regenerateSpeeds() {
@@ -179,8 +202,6 @@
       }
     }
 
-    // Live config changes. Structural ones (worker count, heterogeneity) are
-    // handled specially so the running simulation keeps its state.
     update(partial) {
       const prev = this.config;
       const next = Object.assign({}, prev, partial);
@@ -193,11 +214,12 @@
       if (partial.heterogeneity !== undefined && partial.heterogeneity !== prev.heterogeneity) {
         this.regenerateSpeeds();
       }
+      if (partial.routing === 'sticky' && prev.routing !== 'sticky') {
+        for (const b of this.dispatcher) if (b.worker === null) b.worker = this.rng.int(this.workers.length);
+      }
     }
 
     // ---------- incidents ----------
-    // type: 'spike' (arrival multiplier), 'slowdown' (rate multiplier),
-    //       'outage' (fraction of workers offline), 'upstreamDelay' (arrivals held)
     addIncident(type, magnitude, duration) {
       const inc = {
         id: this.nextIncidentId++, type, magnitude, duration,
@@ -223,7 +245,7 @@
       const inc = this.incidents.find(i => i.id === id);
       if (!inc) return;
       if (inc.type === 'outage') {
-        for (const wid of inc.workers) this.workers[wid].offlineUntil = -1;
+        for (const wid of inc.workers) if (this.workers[wid]) this.workers[wid].offlineUntil = -1;
       }
       if (inc.type === 'upstreamDelay') this.releaseHeld();
       this.incidents = this.incidents.filter(i => i.id !== id);
@@ -270,39 +292,62 @@
     cutBundle(size) {
       const b = {
         id: this.nextBundleId++, size, remaining: size,
-        createdTick: this.intake.oldestTick, dispatchedTick: this.tick,
+        createdTick: this.intake.oldestTick, cutTick: this.tick, dispatchedTick: null,
+        worker: this.config.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
       };
       this.intake.items -= size;
       if (this.intake.items <= 0) { this.intake.items = 0; this.intake.oldestTick = null; }
-      else this.intake.oldestTick = this.tick; // approximation: leftovers are "fresh"
+      else this.intake.oldestTick = this.tick; // leftovers are treated as fresh
+      this.totals.bundlesCut++;
+      this.events.push({ type: 'bundle', size });
       return b;
     }
 
-    pickWorker() {
-      const ws = this.workers;
-      const routing = this.config.routing;
-      if (routing === 'random') return ws[this.rng.int(ws.length)];
-      if (routing === 'roundRobin') {
-        const w = ws[this.rrCursor % ws.length];
-        this.rrCursor = (this.rrCursor + 1) % ws.length;
-        return w;
-      }
-      // leastLoaded: fewest queued items among online workers; random tie-break
-      let best = null, bestLoad = Infinity, ties = 0;
-      for (const w of ws) {
-        if (w.offlineUntil >= this.tick) continue;
-        const load = queuedItems(w);
-        if (load < bestLoad) { best = w; bestLoad = load; ties = 1; }
-        else if (load === bestLoad) { ties++; if (this.rng.uniform() < 1 / ties) best = w; }
-      }
-      return best || ws[this.rng.int(ws.length)];
-    }
+    // ---------- dispatcher ----------
+    isIdle(w) { return w.bundle === null && w.offlineUntil < this.tick; }
 
-    dispatch(bundle) {
-      const w = this.pickWorker();
-      w.queue.push(bundle);
+    assign(w, bundle) {
+      w.bundle = bundle;
+      bundle.dispatchedTick = this.tick;
       this.totals.bundlesDispatched++;
       this.events.push({ type: 'dispatch', worker: w.id, size: bundle.size });
+    }
+
+    // Hand as many queued bundles as possible to workers. Returns count.
+    dispatchQueued() {
+      const ws = this.workers, q = this.dispatcher;
+      if (!q.length) return 0;
+      let n = 0;
+      if (this.config.routing === 'sticky') {
+        // A bundle waits for its own worker, which may be busy or even offline.
+        for (let i = 0; i < q.length;) {
+          const b = q[i], w = ws[b.worker];
+          if (w && w.bundle === null) { this.assign(w, b); q.splice(i, 1); n++; }
+          else i++;
+        }
+        return n;
+      }
+      if (this.config.routing === 'roundRobin') {
+        const N = ws.length;
+        let scanned = 0;
+        while (q.length && scanned < N) {
+          const w = ws[this.rrCursor % N];
+          this.rrCursor = (this.rrCursor + 1) % N;
+          scanned++;
+          if (this.isIdle(w)) { this.assign(w, q.shift()); n++; scanned = 0; }
+        }
+        return n;
+      }
+      // idle: random idle online worker
+      const idle = [];
+      for (const w of ws) if (this.isIdle(w)) idle.push(w);
+      while (q.length && idle.length) {
+        const k = this.rng.int(idle.length);
+        const w = idle[k];
+        idle[k] = idle[idle.length - 1]; idle.pop();
+        this.assign(w, q.shift()); n++;
+      }
+      return n;
     }
 
     // ---------- the tick ----------
@@ -329,107 +374,113 @@
         this.addToIntake(arrivals, t);
       }
 
-      // 2. Bundling + dispatch
-      let dispatched = 0;
-      while (this.intake.items >= cfg.bundleSize) {
-        this.dispatch(this.cutBundle(cfg.bundleSize));
-        dispatched++;
+      // 2. Dispatch what was already queued, then bundle while the dispatcher
+      //    has room, handing bundles straight through to idle workers.
+      let dispatched = this.dispatchQueued();
+      let cut = 0;
+      const room = () => this.dispatcher.length < cfg.dispatcherCapacity;
+      while (this.intake.items >= cfg.bundleSize && room()) {
+        this.dispatcher.push(this.cutBundle(cfg.bundleSize));
+        cut++;
+        dispatched += this.dispatchQueued();
       }
-      if (this.intake.items > 0 && t - this.intake.oldestTick >= cfg.bundleMaxWait) {
-        this.dispatch(this.cutBundle(this.intake.items));
-        dispatched++;
+      if (this.intake.items > 0 && room() && t - this.intake.oldestTick >= cfg.bundleMaxWait) {
+        this.dispatcher.push(this.cutBundle(this.intake.items));
+        cut++;
+        dispatched += this.dispatchQueued();
       }
 
-      // 3. Processing
-      let processed = 0, busy = 0, offline = 0, capacityAvailable = 0;
+      // 3. Processing: one bundle per worker
+      let processed = 0, busy = 0, offline = 0;
       const latencies = [];
       for (const w of this.workers) {
         if (w.offlineUntil >= t) {
           offline++; w.lastRate = 0; w.lastWorked = 0;
           continue;
         }
-        if (w.queue.length) busy++;
         let rate = sampleRate(this.rng, cfg.dist) * w.speed * mods.rateMult;
         if (rate > 1) rate = 1;
         w.lastRate = rate;
-        let capacity = rate * cfg.bundleSize;
-        capacityAvailable += capacity;
-        let worked = 0;
-        while (capacity > 1e-9 && w.queue.length) {
-          const b = w.queue[0];
-          const take = Math.min(capacity, b.remaining);
-          b.remaining -= take; capacity -= take; worked += take;
-          if (b.remaining <= 1e-9) {
-            w.queue.shift();
-            latencies.push(t - b.createdTick);
-            this.totals.bundlesCompleted++;
-          }
+        w.lastWorked = 0;
+        const b = w.bundle;
+        if (!b) continue;
+        busy++;
+        const take = Math.min(rate * cfg.bundleSize, b.remaining);
+        b.remaining -= take;
+        w.lastWorked = take;
+        w.processed += take;
+        processed += take;
+        if (b.remaining <= 1e-9) {
+          w.bundle = null;
+          w.completed++;
+          latencies.push(t - b.createdTick);
+          this.totals.bundlesCompleted++;
+          this.events.push({ type: 'complete', worker: w.id });
         }
-        w.lastWorked = worked;
-        w.processed += worked;
-        processed += worked;
       }
       this.totals.processed += processed;
 
-      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, capacityAvailable);
+      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut);
       this.history.push(snap);
       if (this.history.length > cfg.historyLength) this.history.shift();
       this.last = snap;
       return snap;
     }
 
-    snapshot(arrivals, dispatched, processed, busy, latencies, offline, capacityAvailable) {
+    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut) {
       const t = this.tick;
-      let queuedItems_ = 0, queuedBundles = 0, oldest = null, maxQueue = 0;
+      let inProgress = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
-        let q = 0;
-        for (const b of w.queue) {
-          q += b.remaining;
-          if (oldest === null || b.createdTick < oldest) oldest = b.createdTick;
-        }
-        queuedItems_ += q;
-        queuedBundles += w.queue.length;
-        if (q > maxQueue) maxQueue = q;
+        if (!w.bundle) continue;
+        inProgress += w.bundle.remaining;
+        if (oldest === null || w.bundle.createdTick < oldest) oldest = w.bundle.createdTick;
+        const age = t - w.bundle.dispatchedTick;
+        if (age > maxAge) maxAge = age;
+      }
+      let queuedItems_ = 0;
+      for (const b of this.dispatcher) {
+        queuedItems_ += b.remaining;
+        if (oldest === null || b.createdTick < oldest) oldest = b.createdTick;
       }
       if (this.intake.items > 0 && (oldest === null || this.intake.oldestTick < oldest)) oldest = this.intake.oldestTick;
       if (this.held.items > 0 && (oldest === null || this.held.oldestTick < oldest)) oldest = this.held.oldestTick;
       latencies.sort((a, b) => a - b);
       const pct = p => latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))] : null;
       const n = this.workers.length;
-      const expected = expectedRateCached(this.config.dist);
+      const bundleTicks = expectedBundleTicksCached(this.config.dist);
+      const capacity = (n * this.config.bundleSize) / bundleTicks;
+      offline = offline || 0;
       return {
         tick: t,
-        arrivals, dispatched, processed,
-        backlogItems: queuedItems_ + this.intake.items + this.held.items,
-        queuedItems: queuedItems_, queuedBundles,
+        arrivals, dispatched, processed, cut: cut || 0,
+        backlogItems: inProgress + queuedItems_ + this.intake.items + this.held.items,
+        inProgressItems: inProgress,
+        dispatcherItems: queuedItems_,
+        dispatcherQueued: this.dispatcher.length,
+        dispatcherCapacity: this.config.dispatcherCapacity,
         intakeItems: this.intake.items, heldItems: this.held.items,
-        maxQueue,
         oldestAge: oldest === null ? 0 : t - oldest,
+        maxBundleAge: maxAge,
         latencyP50: pct(0.5), latencyP95: pct(0.95), latencyMax: latencies.length ? latencies[latencies.length - 1] : null,
         completedBundles: latencies.length,
-        busy, offline: offline || 0, idle: n - busy - (offline || 0),
-        utilization: n - (offline || 0) > 0 ? busy / (n - (offline || 0)) : 0,
-        capacityAvailable: capacityAvailable || 0,
-        // Long-run expected capacity in items/tick with all workers online.
-        nominalCapacity: n * expected * this.config.bundleSize,
-        load: this.config.arrivalRate / Math.max(1e-9, n * expected * this.config.bundleSize),
+        busy, offline, idle: n - busy - offline,
+        utilization: n - offline > 0 ? busy / (n - offline) : 0,
+        expectedBundleTicks: bundleTicks,
+        nominalCapacity: capacity,
+        load: this.config.arrivalRate / Math.max(1e-9, capacity),
       };
     }
   }
 
-  function queuedItems(w) {
-    let q = 0;
-    for (const b of w.queue) q += b.remaining;
-    return q;
-  }
-
-  // Memoise expected clamped rate per distribution parameter set.
-  let _erKey = null, _erVal = 0;
-  function expectedRateCached(dist) {
+  let _btKey = null, _btVal = 0;
+  function expectedBundleTicksCached(dist) {
     const key = JSON.stringify(dist);
-    if (key !== _erKey) { _erKey = key; _erVal = expectedRate(dist); }
-    return _erVal;
+    if (key !== _btKey) { _btKey = key; _btVal = expectedBundleTicks(dist); }
+    return _btVal;
   }
 
-  return { Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, makeRng, sampleRate, expectedRate, queuedItems };
+  return {
+    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, makeRng, sampleRate,
+    expectedRate, expectedBundleTicks: expectedBundleTicksCached,
+  };
 });
