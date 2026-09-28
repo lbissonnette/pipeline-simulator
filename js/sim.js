@@ -816,11 +816,19 @@
 
     snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled, blocked, written) {
       const t = this.tick;
-      let inProgress = 0, workerItems = 0, blockedItems = 0, oldest = null, maxAge = 0;
+      let inProgress = 0, workerItems = 0, blockedItems = 0, deathStuckItems = 0, degradedStuckItems = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
         if (!w.bundle) continue;
-        if (w.bundle.finished) blockedItems += w.bundle.size; // processed, waiting for the writer
-        else { inProgress += w.bundle.remaining; workerItems += w.bundle.size; }
+        const b = w.bundle;
+        if (b.finished) blockedItems += b.size; // processed, waiting for the writer
+        else {
+          inProgress += b.remaining;
+          // where is this bundle stuck? degraded/offline worker first, then a
+          // conversion-of-death stall, else it is being processed normally
+          if (w.offlineUntil >= t || this.degradeFactor(w) < 1) degradedStuckItems += b.size;
+          else if (b.stallLeft > 0 && b.stallPoison) deathStuckItems += b.size;
+          else workerItems += b.size;
+        }
         if (oldest === null || w.bundle.createdTick < oldest) oldest = w.bundle.createdTick;
         const age = t - w.bundle.dispatchedTick;
         if (age > maxAge) maxAge = age;
@@ -849,7 +857,9 @@
         arrivals, dispatched, processed, written: written || 0, cut: cut || 0,
         backlogItems: inProgress + queuedItems_ + this.intake.items + this.held.items + writerItems + blockedItems,
         inProgressItems: inProgress,
-        workerItems,                 // conversions inside bundles being processed (not yet written out)
+        workerItems,                 // conversions inside bundles being processed normally (not yet written out)
+        deathStuckItems,             // ... on workers currently stalled on a conversion of death
+        degradedStuckItems,          // ... on degraded or offline workers
         blockedItems,                // processed bundles stuck on workers waiting for the writer
         writerItems,                 // conversions in the writer buffer not yet written
         writerQueued: this.writer.queue.length,

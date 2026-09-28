@@ -121,7 +121,13 @@
       }
       const ttSeries = this.stacked ? this.series.slice().reverse() : this.series; // top layer first
       for (const s of ttSeries) {
-        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(row[s.rawKey || s.key])}</b></div>`;
+        const v = row[s.rawKey || s.key];
+        let pct = '';
+        if (this.stacked) {
+          const total = row[this.series[this.series.length - 1].key];
+          pct = total > 0 ? ` · ${((100 * (v || 0)) / total).toFixed(1)}%` : '';
+        }
+        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(v)}${pct}</b></div>`;
       }
       if (this.stacked) {
         const top = this.series[this.series.length - 1];
@@ -140,6 +146,7 @@
       const tw = this.tooltip.offsetWidth;
       let tx = x + 14;
       if (tx + tw > this.w - 4) tx = x - tw - 14;
+      if (tx < 4) tx = Math.max(4, Math.min(x + 14, this.w - tw - 4)); // never off the left edge
       this.tooltip.style.left = tx + 'px';
       this.tooltip.style.top = Math.max(4, e.clientY - rect.top - 10) + 'px';
     }
@@ -378,6 +385,7 @@
       const tw = this.tooltip.offsetWidth;
       let tx = x + 14;
       if (tx + tw > this.w - 4) tx = x - tw - 14;
+      if (tx < 4) tx = Math.max(4, Math.min(x + 14, this.w - tw - 4)); // never off the left edge
       this.tooltip.style.left = tx + 'px';
       this.tooltip.style.top = Math.max(4, e.clientY - rect.top - 10) + 'px';
     }

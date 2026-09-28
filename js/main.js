@@ -659,7 +659,9 @@
     where: new LineChart($('#chart-where'), Object.assign({}, timeOpts, {
       stacked: true,
       series: [
-        { key: 'stackWorkers', rawKey: 'workerItems', name: 'workers', color: '--s1' },
+        { key: 'stackWorkers', rawKey: 'workerItems', name: 'processing', color: '--s1' },
+        { key: 'stackDeath', rawKey: 'deathStuckItems', name: 'stuck on a conversion of death', color: '--s8' },
+        { key: 'stackDegraded', rawKey: 'degradedStuckItems', name: 'on degraded / offline workers', color: '--s7' },
         { key: 'stackDispatcher', rawKey: 'dispatcherItems', name: 'dispatcher', color: '--s2' },
         { key: 'stackBundler', rawKey: 'intakeItems', name: 'bundler', color: '--s3' },
         { key: 'stackUpstream', rawKey: 'heldItems', name: 'upstream', color: '--s4' },
@@ -880,12 +882,14 @@
         const at = p => all[Math.min(all.length - 1, Math.floor(all.length * p))] / TICKS_PER_HOUR;
         st.p50 = at(0.5); st.p90 = at(0.9); st.p99 = at(0.99);
       } else if (st.latCount < 5) { st.p50 = null; st.p90 = null; st.p99 = null; }
-      const wk = h.workerItems || 0, dq = h.dispatcherItems || 0, bu = h.intakeItems || 0, up = h.heldItems || 0;
+      const wk = h.workerItems || 0, de = h.deathStuckItems || 0, dg = h.degradedStuckItems || 0;
+      const dq = h.dispatcherItems || 0, bu = h.intakeItems || 0, up = h.heldItems || 0;
       const wrs = (h.writerItems || 0) + (h.blockedItems || 0); // buffered or finished-but-blocked
+      const c1 = wk, c2 = c1 + de, c3 = c2 + dg, c4 = c3 + dq, c5 = c4 + bu, c6 = c5 + up, c7 = c6 + wrs;
       st.rows.push({
         tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
-        workerItems: wk, dispatcherItems: dq, intakeItems: bu, heldItems: up, writerStage: wrs,
-        stackWorkers: wk, stackDispatcher: wk + dq, stackBundler: wk + dq + bu, stackUpstream: wk + dq + bu + up, stackWriter: wk + dq + bu + up + wrs,
+        workerItems: wk, deathStuckItems: de, degradedStuckItems: dg, dispatcherItems: dq, intakeItems: bu, heldItems: up, writerStage: wrs,
+        stackWorkers: c1, stackDeath: c2, stackDegraded: c3, stackDispatcher: c4, stackBundler: c5, stackUpstream: c6, stackWriter: c7,
         dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
         arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
         latP50Hr: st.p50, latP90Hr: st.p90, latP99Hr: st.p99,

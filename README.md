@@ -53,8 +53,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 - **Age percentiles of processed data** – P50/P90/P99 of the end-to-end age
   of bundles at write-out, over a rolling one-hour window of completions.
 - **Where in-flight data is** – a stacked area of conversions not yet written
-  out, by stage: on workers, queued at the dispatcher, buffered at the bundler,
-  held upstream.
+  out, by stage: being processed, stuck behind a conversion-of-death stall, on
+  degraded or offline workers, queued at the dispatcher, buffered at the
+  bundler, held upstream, at the writer. Hover for each layer's share.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, dispatcher queue depth, and busy share. Hover for exact values.
 - **PDF / CDF** – both distribution charts toggle between the share per bin

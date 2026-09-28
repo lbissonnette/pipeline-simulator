@@ -505,6 +505,20 @@ test('incident log records start, end, and manual switch-off', () => {
   assert.equal(sim.incidents.length, 0);
 });
 
+test('in-flight breakdown: stuck-on-death and degraded layers sum with the rest', () => {
+  const sim = new Simulation({ seed: 121 });
+  run(sim, 1500);
+  sim.addIncident('degrade', { factor: 0, fraction: 0.2, selection: 'random' }, 300);
+  sim.addIncident('poison', { share: 0.002, cost: 300 }, 300);
+  run(sim, 200); // sample while both incidents are active
+  const s = sim.last;
+  assert.ok(s.degradedStuckItems > 0 && s.deathStuckItems > 0, JSON.stringify({ d: s.degradedStuckItems, p: s.deathStuckItems }));
+  // the worker layers partition the in-progress bundles
+  const onWorkers = sim.workers.reduce((a, w) => a + (w.bundle && !w.bundle.finished ? w.bundle.size : 0), 0);
+  assert.ok(Math.abs(s.workerItems + s.deathStuckItems + s.degradedStuckItems - onWorkers) < 1e-6);
+  invariants(sim);
+});
+
 test('a single stall never exceeds the cap', () => {
   const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
   run(sim, 400);
