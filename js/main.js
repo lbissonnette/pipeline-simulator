@@ -640,6 +640,35 @@
     { key: '7d', name: 'last 7 d', color: '--s2', ticks: 7 * 24 * TICKS_PER_HOUR },
   ];
   const BIN_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120];
+
+  // Histogram x-ranges ratchet: they grow at once when the data needs it and
+  // shrink only when the old maximum falls out of a 12-hour window of
+  // simulated time. Without this the range (and with it the bin width) is
+  // recomputed from the current data every frame and the chart twitches.
+  class RollingMax {
+    constructor(windowTicks) { this.window = windowTicks; this.q = []; this.lastTick = -1; }
+    push(tick, value) {
+      if (tick < this.lastTick) this.q = []; // simulation was reset
+      this.lastTick = tick;
+      while (this.q.length && this.q[this.q.length - 1].value <= value) this.q.pop();
+      this.q.push({ tick, value });
+      while (this.q.length && this.q[0].tick < tick - this.window) this.q.shift();
+      return this.q[0].value;
+    }
+  }
+  const HIST_RANGE_WINDOW = 12 * TICKS_PER_HOUR;
+  const latencyRange = new RollingMax(HIST_RANGE_WINDOW);
+  const inflightRange = new RollingMax(HIST_RANGE_WINDOW);
+
+  // Bin width and count for a range in minutes (at most ~60 bins), plus one overflow bin.
+  function binPlan(rangeMin) {
+    const maxMin = Math.max(30, rangeMin + 1);
+    let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
+    for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
+    const nBins = Math.ceil(maxMin / binMin) + 1;
+    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin, overflow: i === nBins - 1 }));
+    return { binMin, nBins, bins };
+  }
   const histChart = new Histogram($('#chart-hist'), {
     xLabel: v => fmtDur(v * TICKS_PER_MIN),
     xTicks: (x0, x1) => timeTicks(x0 * TICKS_PER_MIN, x1 * TICKS_PER_MIN).map(t => ({ value: t.value / TICKS_PER_MIN, label: t.label })),
@@ -701,11 +730,7 @@
       w.win.update();
       if (w.win.total > 0) { const p = w.win.percentile(0.995) / TICKS_PER_MIN; if (p > span) span = p; }
     }
-    const maxMin = Math.max(30, span + 1);
-    let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
-    for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
-    const nBins = Math.ceil(maxMin / binMin) + 1;
-    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin, overflow: i === nBins - 1 }));
+    const { binMin, nBins, bins } = binPlan(latencyRange.push(sim.tick, span));
     const series = histWindows.map(w => {
       const counts = w.win.binned(binMin, nBins), total = w.win.total;
       return { name: w.name, color: w.color, counts, values: counts.map(v => total > 0 ? Math.max(0, (100 * v) / total) : 0) };
@@ -727,11 +752,7 @@
     // range from the 99.5th percentile of age, overflow bin beyond
     let span = 0, acc = 0;
     for (const r of rows) { acc += r.count; if (acc >= 0.995 * total) { span = r.age / TICKS_PER_MIN; break; } }
-    const maxMin = Math.max(30, span + 1);
-    let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
-    for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
-    const nBins = Math.ceil(maxMin / binMin) + 1;
-    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin, overflow: i === nBins - 1 }));
+    const { binMin, nBins, bins } = binPlan(inflightRange.push(sim.tick, span));
     const counts = new Array(nBins).fill(0);
     for (const r of rows) counts[Math.min(nBins - 1, Math.floor(r.age / TICKS_PER_MIN / binMin))] += r.count;
     inflightHist.setData({ bins, series: [{ name: 'in flight', color: '--s1', counts, values: counts.map(v => total > 0 ? (100 * v) / total : 0) }] });
