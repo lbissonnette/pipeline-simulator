@@ -176,7 +176,7 @@
   const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
   const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
   const FRESH_LEVELS = [50, 90, 99];
-  const FRESH_WINDOW = 3;          // cohorts per fresh-time window (3 minutes)
+  const FRESH_WINDOW = 5;          // cohorts per fresh-time window (5 minutes)
   const cohortOf = tick => Math.floor((tick - 1) / COHORT_TICKS);
 
   // ---------- simulation ----------
