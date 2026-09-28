@@ -62,17 +62,17 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  // 1,200-conversion bundles (20 min of work) plus ~1.6 expensive conversions at
-  // 9 ± 25 min each: end-to-end median ~25 min, p99 ~2.5 h, capacity ~5,800/tick.
-  const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.001333, expensiveCost: 54, expensiveCostSd: 150 };
+  // 1,200-conversion bundles (20 min of work) plus ~1.8 expensive conversions at
+  // 2 ± 3 min each: end-to-end median ~23 min, p99 ~45 min, capacity ~8,600/tick.
+  const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1024, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0015, expensiveCost: 12, expensiveCostSd: 18 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
-    healthy:    Object.assign({}, BASE, { arrivalRate: 4650, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 7000, dist: NORMAL }),
-    // no expensive conversions: every bundle takes ~20 min; capacity ~10,000/tick
-    clean:      Object.assign({}, BASE, { arrivalRate: 8000, expensiveFraction: 0, dist: NORMAL }),
-    sticky:     Object.assign({}, BASE, { arrivalRate: 4650, routing: 'sticky', dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 4650, waveAmplitude: 0.6, dist: NORMAL }),
+    healthy:    Object.assign({}, BASE, { arrivalRate: 6900, dist: NORMAL }),
+    overloaded: Object.assign({}, BASE, { arrivalRate: 10400, dist: NORMAL }),
+    // no expensive conversions: every bundle takes ~20 min; capacity ~10,200/tick
+    clean:      Object.assign({}, BASE, { arrivalRate: 8200, expensiveFraction: 0, dist: NORMAL }),
+    sticky:     Object.assign({}, BASE, { arrivalRate: 6900, routing: 'sticky', dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 6900, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------

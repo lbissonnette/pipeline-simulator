@@ -140,12 +140,12 @@
   // ---------- defaults ----------
   // Defaults assume a tick of 10 seconds: a worker does 10 conversions per
   // tick (1/s), so a bundle of 1,200 takes ~120 ticks (20 min) of work plus
-  // expensive-conversion stalls (1.6 per bundle on average, 9 ± 25 min each,
-  // capped at 4 h), for an end-to-end median of ~25 min with a long tail
-  // (p99 ~2.5 h). 1,000 identical workers give ~5,800 conversions per tick.
+  // expensive-conversion stalls (1.8 per bundle on average, 2 ± 3 min each,
+  // capped at 4 h), for an end-to-end median of ~23 min (p99 ~45 min).
+  // 1,024 identical workers (a 32 x 32 grid) give ~8,600 conversions per tick.
   const DEFAULTS = {
-    workers: 1000,
-    arrivalRate: 4650,         // mean conversions per tick (Poisson), rho ~0.8
+    workers: 1024,
+    arrivalRate: 6900,         // mean conversions per tick (Poisson), rho ~0.8
     waveAmplitude: 0,          // 0..1 modulation of arrivals
     wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
     bundleSize: 1200,          // conversions per bundle (20 min at 10/tick)
@@ -155,9 +155,9 @@
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     // Expensive conversions: a small share of conversions each cost a fixed
     // extra processing time. A bundle holding k of them stalls k x cost ticks.
-    expensiveFraction: 0.001333, // share of conversions that are expensive (0.133%, ~1.6 per bundle)
-    expensiveCost: 54,         // mean extra ticks per expensive conversion (9 min)
-    expensiveCostSd: 150,      // sd of that cost (log-normal), 25 min: the long tail
+    expensiveFraction: 0.0015, // share of conversions that are expensive (0.15%, ~1.8 per bundle)
+    expensiveCost: 12,         // mean extra ticks per expensive conversion (2 min)
+    expensiveCostSd: 18,       // sd of that cost (log-normal), 3 min
     expensiveCostCap: 1440,    // no single stall longer than this (4 h), like a timeout
     historyLength: 4320,       // 12 h
     completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
