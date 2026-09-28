@@ -115,6 +115,7 @@
     partial.dist = dist;
     sim.update(partial);
     geom = null;
+    updateDegradeWarning();
     $('#arrival-rate-s').textContent = fmtInt(partial.arrivalRate / TICK_SECONDS);
     const perBundle = partial.bundleSize * partial.expensiveFraction;
     $('#expensive-per-bundle').textContent = perBundle.toFixed(2);
@@ -144,6 +145,13 @@
     readControlsIntoSim();
   }));
 
+  // Warn when both the dispatcher and the degradation target the lowest indices.
+  function updateDegradeWarning() {
+    const both = sim.config.routing === 'lowestIdle' && $('#degrade-sel').value === 'lowest';
+    $('#degrade-warning').hidden = !both;
+  }
+  $('#degrade-sel').addEventListener('change', updateDegradeWarning);
+
   $$('[data-preset]').forEach(btn => btn.addEventListener('click', () => {
     applyToControls(PRESETS[btn.dataset.preset]);
     $$('.chip.active').forEach(c => c.classList.remove('active'));
@@ -169,16 +177,32 @@
     upstreamDelay: () => 'Upstream delay (holding arrivals)',
   };
 
+  // The list's DOM is rebuilt only when the set of incidents changes; while
+  // they run, only the countdown text and bar width are updated (about once
+  // a second from the render loop), so the page is not re-laid-out every tick.
+  const incidentRows = new Map(); // id -> { li, bar, time }
+  let incidentSignature = '';
   function renderIncidents() {
     const ul = $('#active-incidents');
-    ul.innerHTML = '';
+    const sig = sim.incidents.map(i => i.id).join(',');
+    if (sig !== incidentSignature) {
+      incidentSignature = sig;
+      ul.innerHTML = '';
+      incidentRows.clear();
+      for (const inc of sim.incidents) {
+        const li = document.createElement('li');
+        li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i></i></span><span class="num"></span><button title="Cancel" aria-label="Cancel incident">×</button>`;
+        li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(true); });
+        ul.appendChild(li);
+        incidentRows.set(inc.id, { li, bar: li.querySelector('.bar i'), time: li.querySelector('.num') });
+      }
+    }
     for (const inc of sim.incidents) {
-      const li = document.createElement('li');
+      const row = incidentRows.get(inc.id);
+      if (!row) continue;
       const left = Math.max(0, inc.end - sim.tick);
-      const pct = 100 * (1 - left / inc.duration);
-      li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i style="width:${pct}%"></i></span><span>${fmtDur(left)}</span><button title="Cancel" aria-label="Cancel incident">×</button>`;
-      li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(true); });
-      ul.appendChild(li);
+      row.bar.style.width = (100 * (1 - left / inc.duration)).toFixed(1) + '%';
+      row.time.textContent = fmtDurFixed(left);
     }
   }
 
@@ -282,8 +306,6 @@
   function doTick() {
     const snap = sim.step();
     spawnParticles(sim.events, snap);
-    if (sim.tick % 6 === 0 && sim.incidents.length) renderIncidents();
-    else if (sim.incidents.length === 0 && $('#active-incidents').children.length) renderIncidents();
     return snap;
   }
 
@@ -397,8 +419,7 @@
   }
 
   let theme = null;      // cached colours; rebuilt on theme change
-  let hatch = null;      // cached CanvasPattern for offline cells
-  let hatchSlow = null;  // cached overlay pattern for slowed cells
+
   function buildRamp() {
     ramp = cssVar('--ramp').split(',').map(s => s.trim());
     theme = {
@@ -407,20 +428,6 @@
       idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
       s1: cssVar('--s1'), s2: cssVar('--s2'),
     };
-    const pc = document.createElement('canvas');
-    pc.width = 8; pc.height = 8;
-    const px = pc.getContext('2d');
-    px.fillStyle = theme.offline; px.fillRect(0, 0, 8, 8);
-    px.strokeStyle = theme.offlineInk; px.lineWidth = 1.2;
-    px.beginPath(); px.moveTo(-2, 6); px.lineTo(6, -2); px.moveTo(2, 10); px.lineTo(10, 2); px.stroke();
-    hatch = sctx.createPattern(pc, 'repeat');
-    // slowed workers: translucent light stripes drawn over the cell fill
-    const sc = document.createElement('canvas');
-    sc.width = 8; sc.height = 8;
-    const sx = sc.getContext('2d');
-    sx.strokeStyle = 'rgba(255,255,255,0.7)'; sx.lineWidth = 1.5;
-    sx.beginPath(); sx.moveTo(-2, 6); sx.lineTo(6, -2); sx.moveTo(2, 10); sx.lineTo(10, 2); sx.stroke();
-    hatchSlow = sctx.createPattern(sc, 'repeat');
   }
 
   function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
@@ -487,6 +494,7 @@
 
     // worker grid
     const cell = g.cell, rad = Math.min(4, cell / 4);
+    const offlineCells = [], slowedCells = []; // hatched in one batched stroke each, after the loop
     const expected = bundleTicks();
     const ageScale = 2 * expected; // darkest at 2x the expected bundle time
     const showBar = cell >= 9;
@@ -503,13 +511,12 @@
         const ratio = Math.min(1, (tick - w.bundle.dispatchedTick) / ageScale);
         fill = ramp[Math.round(ratio * (ramp.length - 1))];
       }
-      ctx.fillStyle = offline && cell >= 6 && hatch ? hatch : fill;
+      ctx.fillStyle = fill;
       if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
       else ctx.fillRect(x, y, cell, cell);
-      if (!offline && cell >= 6 && hatchSlow && w.degradations.length && sim.degradeFactor(w) < 1) {
-        ctx.fillStyle = hatchSlow;
-        if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
-        else ctx.fillRect(x, y, cell, cell);
+      if (cell >= 6) {
+        if (offline) offlineCells.push(x, y);
+        else if (w.degradations.length && sim.degradeFactor(w) < 1) slowedCells.push(x, y);
       }
       if (w.bundle && showBar) {
         const b = w.bundle;
@@ -528,6 +535,24 @@
         ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2);
       }
     }
+
+    // hatching: one stroke for all offline cells, one for all slowed cells
+    // (per-cell pattern fills were the main cost during incidents)
+    const hatchCells = (cells, color, width) => {
+      if (!cells.length) return;
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'butt';
+      ctx.beginPath();
+      const c = cell, h = c / 2;
+      for (let k = 0; k < cells.length; k += 2) {
+        const x = cells[k] + 1, y = cells[k + 1] + 1, s = c - 2;
+        ctx.moveTo(x, y + s / 2); ctx.lineTo(x + s / 2, y);
+        ctx.moveTo(x, y + s); ctx.lineTo(x + s, y);
+        ctx.moveTo(x + s / 2, y + s); ctx.lineTo(x + s, y + s / 2);
+      }
+      ctx.stroke();
+    };
+    hatchCells(offlineCells, C.offlineInk, 1.2);
+    hatchCells(slowedCells, 'rgba(255,255,255,0.75)', 1.5);
 
     // particles
     const now = performance.now();
@@ -810,7 +835,7 @@
   // readouts (tiles and header figures) refresh a few times a second so the
   // digits do not flicker, and immediately when paused, stepping or resizing.
   const TEXT_INTERVAL_MS = 250;
-  let lastText = 0;
+  let lastText = 0, lastIncidents = 0;
 
   // Adaptive chart cadence. The stage draws every frame. The charts are
   // spread round-robin over `chartStride` frames (2 = each chart at 30 Hz on a
@@ -851,6 +876,8 @@
       else { c.setData(rows); if (mine) c.draw(); }
     }
     if (drawAll || (i % chartStride) === slot) renderHistogram();
+    // incident countdowns: once a second, or at once when the set changes
+    if (force || now - lastIncidents >= 1000 || sim.incidents.length !== incidentRows.size) { lastIncidents = now; renderIncidents(); }
     if (!force && playing && now - lastText < TEXT_INTERVAL_MS) return;
     lastText = now;
     updateKpis(rows);

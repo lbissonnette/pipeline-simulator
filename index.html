@@ -134,7 +134,8 @@
         <div class="inc-name">Degraded workers</div>
         <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
         <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
-          <select id="degrade-sel"><option value="lowest">lowest by index</option><option value="random">chosen at random</option></select></label>
+          <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
+        <p class="warn" id="degrade-warning" hidden>Heads-up: routing is also lowest-index (first fit), so this degrades exactly the workers that receive most of the work. The impact will be far larger than the same share chosen at random. Fine if that is the point.</p>
         <label>for <input type="number" id="degrade-dur" min="1" max="4320" step="1" value="60"> min</label>
         <button class="btn small" data-incident="degrade">Fire</button>
       </div>

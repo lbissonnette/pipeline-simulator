@@ -252,8 +252,8 @@
     //       'degrade'       magnitude = { factor, fraction, selection }: a
     //                       `fraction` of workers run at `factor` x their rate;
     //                       factor 0 is a full outage (offline, skipped by idle
-    //                       routing). selection 'lowest' (default) takes the
-    //                       lowest indices, 'random' picks them at random.
+    //                       routing). selection 'random' (default) picks them
+    //                       at random, 'lowest' takes the lowest indices.
     //       'upstreamDelay' arrivals are held until the incident ends
     //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
@@ -267,7 +267,7 @@
         const factor = Math.max(0, magnitude.factor);
         const count = Math.round(this.workers.length * Math.min(1, Math.max(0, magnitude.fraction)));
         const ids = this.workers.map(w => w.id);
-        inc.selection = magnitude.selection === 'random' ? 'random' : 'lowest';
+        inc.selection = magnitude.selection === 'lowest' ? 'lowest' : 'random';
         if (inc.selection === 'random') {
           for (let i = ids.length - 1; i > 0; i--) {
             const j = this.rng.int(i + 1);
