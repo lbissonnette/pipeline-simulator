@@ -3,10 +3,10 @@
 An interactive, dependency-free simulation of a streaming conversion pipeline.
 Conversions (sign-ups, purchases after an ad) arrive at a configurable rate, are
 cut into bundles, queue at a bounded dispatcher, and are handed one at a time to
-a pool of 1,000 identical workers. Each tick (10 seconds) every busy worker
+a pool of 1,024 identical workers. Each tick (10 seconds) every busy worker
 completes a random number of conversions, drawn from a distribution you
 control, and a small share of expensive conversions add stalls; with the
-defaults a bundle takes a median of 25 minutes end to end with a long tail. Turn the knobs, inject delays, and
+defaults a bundle takes a median of about 23 minutes end to end. Turn the knobs, inject delays, and
 watch backlogs form and clear.
 
 Live: <https://lbissonnette.github.io/pipeline-simulator/>
@@ -16,8 +16,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 
 ## What you see
 
-- **Flow stage** – a source, a bundler, a dispatcher, a grid of workers (1,000
-  by default, up to 2,000) and a "done" sink. Each busy cell's colour is how
+- **Flow stage** – a source, a bundler, a dispatcher, a grid of workers (1,024
+  by default, up to 2,048) and a "done" sink. Each busy cell's colour is how
   long it has been working on its bundle (light = fresh, dark = twice the
   expected bundle time); the white bar at the bottom is progress on that
   bundle; hatched cells are offline. The dispatcher turns red when its queue is full and the
@@ -54,17 +54,17 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 
 | Group | Control | Effect |
 |---|---|---|
-| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 4,650 = 465/s. |
+| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 6,900 = 690/s. |
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
-| | Expensive conversions | Share of conversions that are expensive (default 0.133%, about 1.6 per bundle), and the mean and spread of each one's extra cost (default 9 ± 25 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
+| | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
 | | Degraded workers | Multiply the rate of a percentage of workers, the lowest by index (default) or chosen at random, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
-| Advanced | Workers | Pool size (default 1,000); can be changed live. |
+| Advanced | Workers | Pool size (default 1,024, a 32 × 32 grid); can be changed live. |
 | | Bundle size | Conversions per bundle (default 1,200, so the work itself takes ~20 min at 10 per tick). |
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
@@ -103,12 +103,12 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    mean and spread; reaching one stalls the worker for that long. Extra time
    per bundle is a compound Poisson sum with mean B × share × cost and
    sd √(B × share × (cost² + spread²)); no single stall exceeds 4 h. The
-   defaults (0.133%, 9 ± 25 min, about 1.6 per bundle) add 14 ± 34 min on top
-   of the 20-minute base, giving an end-to-end median of ~25 min, p90 ~55 min,
-   p99 ~2.5 h.
+   defaults (0.15%, 2 ± 3 min, about 1.8 per bundle) add 3.6 ± 4.8 min on top
+   of the 20-minute base, giving an end-to-end median of ~23 min, p90 ~30 min,
+   p99 ~45 min.
 6. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
    expected ticks are the rate-driven part (estimated by simulation) plus the
-   mean stall time. With the defaults that is ~5,800 conversions per tick. The load ratio
+   mean stall time. With the defaults that is ~8,600 conversions per tick. The load ratio
    ρ = arrivals ÷ capacity is shown live; above 1 the dispatcher pins at its
    capacity and the backlog grows without bound at the bundler.
 7. **Latency** of a bundle is measured from the tick its oldest conversion

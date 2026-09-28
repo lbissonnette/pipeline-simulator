@@ -2,13 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = require('../js/sim.js');
 
-// Defaults: 1000 workers x 10 conversions/tick, 1,200-conversion bundles
-// (~120 ticks of work + ~86 ticks of expensive-conversion stalls) -> capacity
-// ~5,800/tick, end-to-end median ~25 min with a long tail.
+// Defaults: 1024 workers x 10 conversions/tick, 1,200-conversion bundles
+// (~120 ticks of work + ~22 ticks of expensive-conversion stalls) -> capacity
+// ~8,640/tick, end-to-end median ~23 min.
 // Tests that check exact shapes use a reference model: 7,200-conversion
 // bundles (~2 h) with no expensive conversions (PURE), or with a fixed small
 // share (REF) where the stalls themselves are under test.
-const CAP = 5814;
+const CAP = 8644;
+const N = 1024;
 const PURE = { expensiveFraction: 0, bundleSize: 7200 };
 const REF = { bundleSize: 7200, expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 60 };
 function run(sim, ticks) { for (let i = 0; i < ticks; i++) sim.step(); return sim.last; }
@@ -20,7 +21,7 @@ function invariants(sim) {
 
 test('defaults describe the intended scale', () => {
   const sim = new Simulation();
-  assert.equal(sim.workers.length, 1000);
+  assert.equal(sim.workers.length, N);
   assert.ok(Math.abs(sim.last.nominalCapacity - CAP) < CAP * 0.02, `capacity ${sim.last.nominalCapacity}`);
   assert.ok(Math.abs(sim.last.load - 0.8) < 0.02, `load ${sim.last.load}`);
 });
@@ -91,9 +92,9 @@ test('outage takes workers offline; idle routing avoids them', () => {
   const sim = new Simulation({ arrivalRate: 8000, seed: 5 });
   run(sim, 1000);
   const inc = sim.addIncident('outage', 0.3, 200);
-  assert.equal(inc.workers.length, 300);
+  assert.equal(inc.workers.length, Math.round(0.3 * N));
   sim.step();
-  assert.equal(sim.last.offline, 300);
+  assert.equal(sim.last.offline, Math.round(0.3 * N));
   for (const id of inc.workers) assert.equal(sim.workers[id].lastWorked, 0);
   const before = inc.workers.map(id => sim.workers[id].bundle && sim.workers[id].bundle.id);
   run(sim, 100);
@@ -253,9 +254,9 @@ test('degrade incident: a share of workers run slower, and factor 0 means offlin
   const sim = new Simulation({ arrivalRate: 8000, seed: 41 });
   run(sim, 1500);
   const inc = sim.addIncident('degrade', { factor: 0.25, fraction: 0.3, selection: 'random' }, 120);
-  assert.equal(inc.workers.length, 300);
+  assert.equal(inc.workers.length, Math.round(0.3 * N));
   sim.step();
-  assert.equal(sim.last.slowed, 300);
+  assert.equal(sim.last.slowed, Math.round(0.3 * N));
   assert.equal(sim.last.offline, 0);
   // slowed workers still get work and still process, just less of it
   const affected = new Set(inc.workers);
@@ -283,25 +284,26 @@ test('degrade incident: a share of workers run slower, and factor 0 means offlin
 });
 
 test('lowest-idle routing concentrates work on low-index workers', () => {
-  const sim = new Simulation({ arrivalRate: 4200, seed: 51, routing: 'lowestIdle' });
+  const sim = new Simulation({ arrivalRate: 6900, seed: 51, routing: 'lowestIdle' });
   run(sim, 3000);
   const busy = sim.workers.filter(w => w.bundle).map(w => w.id);
   const idle = sim.workers.filter(w => !w.bundle).map(w => w.id);
   const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
   assert.ok(busy.length > 700 && idle.length > 100);
   assert.ok(mean(busy) < mean(idle) - 300, `busy ${mean(busy)} idle ${mean(idle)}`);
-  assert.ok(sim.workers[0].completed > sim.workers[999].completed);
+  assert.ok(sim.workers[0].completed > sim.workers[N - 1].completed);
   invariants(sim);
 });
 
 test('degrade can target the lowest x% of workers by index', () => {
   const sim = new Simulation({ arrivalRate: 8000, seed: 52 });
   run(sim, 100);
+  const k = Math.round(0.2 * N);
   const inc = sim.addIncident('degrade', { factor: 0, fraction: 0.2, selection: 'lowest' }, 60);
-  assert.deepEqual(inc.workers, Array.from({ length: 200 }, (_, i) => i));
+  assert.deepEqual(inc.workers, Array.from({ length: k }, (_, i) => i));
   sim.step();
-  for (let i = 0; i < 200; i++) assert.ok(sim.workers[i].offlineUntil >= sim.tick);
-  assert.ok(sim.workers[200].offlineUntil < sim.tick);
+  for (let i = 0; i < k; i++) assert.ok(sim.workers[i].offlineUntil >= sim.tick);
+  assert.ok(sim.workers[k].offlineUntil < sim.tick);
   const rnd = sim.addIncident('degrade', { factor: 0.5, fraction: 0.2, selection: 'random' }, 60);
   assert.notDeepEqual(rnd.workers.slice().sort((a, b) => a - b), inc.workers);
 });
@@ -343,19 +345,27 @@ test('expensive conversions: each one adds exactly its cost to the bundle', () =
   invariants(sim);
 });
 
-test('default distribution: end-to-end median ~25 min with a long tail', () => {
+test('default distribution: end-to-end median ~23 min, p99 under an hour', () => {
   const sim = new Simulation({ seed: 72 });
   run(sim, 6000);
   const c = sim.latencySamples(3000).slice().sort((a, b) => a.latency - b.latency);
   const total = c.reduce((s, x) => s + x.size, 0);
   const q = p => { let acc = 0; for (const x of c) { acc += x.size; if (acc >= p * total) return x.latency / 6; } return null; };
   assert.ok(c.length > 5000, `completions ${c.length}`);
-  assert.ok(Math.abs(q(0.5) - 25) < 2.5, `median ${q(0.5)} min`);
-  assert.ok(q(0.9) > 45 && q(0.9) < 70, `p90 ${q(0.9)} min`);
-  assert.ok(q(0.99) > 110 && q(0.99) < 220, `p99 ${q(0.99)} min`);
-  // no single stall beyond the 4 h cap
-  for (const x of c) assert.ok(x.latency < 1440 * 4 + 200);
+  assert.ok(Math.abs(q(0.5) - 23) < 2, `median ${q(0.5)} min`);
+  assert.ok(q(0.9) > 26 && q(0.9) < 35, `p90 ${q(0.9)} min`);
+  assert.ok(q(0.99) > 35 && q(0.99) < 60, `p99 ${q(0.99)} min`);
   assert.ok(sim.last.load > 0.75 && sim.last.load < 0.85, `load ${sim.last.load}`);
+});
+
+test('a single stall never exceeds the cap', () => {
+  const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
+  run(sim, 400);
+  for (const w of sim.workers) {
+    if (!w.bundle) continue;
+    for (const st of w.bundle.stalls) assert.ok(st.cost <= 300);
+    assert.ok(w.bundle.stallLeft <= 300);
+  }
 });
 
 test('workers are homogeneous: no per-worker speed state', () => {
