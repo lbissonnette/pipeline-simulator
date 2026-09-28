@@ -26,9 +26,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   unprocessed conversion, p50/p95 end-to-end latency over a 30-minute window,
   arrivals and throughput per tick against expected capacity, dispatcher queue
   depth, and worker utilisation.
-- **Completeness by arrival minute** – for each simulated minute in the last
-  6 hours, the share of conversions that arrived in that minute which have been
-  processed so far. Older minutes sit at 100%, the newest near 0%, and the
+- **Completeness by arrival minute** – for each simulated minute on the same
+  12-hour horizon as the other charts, the share of conversions that arrived in
+  that minute which have been processed so far. Older minutes sit at 100%, the newest near 0%, and the
   slope between them is the processing front; incidents leave dents that
   persist until those cohorts catch up. The header shows the most recent
   minute through which everything is at least 99% complete. Hover for the

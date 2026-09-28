@@ -571,7 +571,6 @@
     ],
     format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_MIN),
   }));
-  const COMPLETENESS_WINDOW_MIN = 6 * 60;
 
   // Most recent arrival minute at which it and every older minute are >= 99% processed.
   function completeThrough(rows) {
@@ -658,13 +657,16 @@
     const rows = chartRows(sim.history);
     updateKpis(rows);
     for (const [name, c] of Object.entries(charts)) { if (name !== 'completeness') { c.setData(rows); c.draw(); } }
-    const cohorts = sim.completeness(COMPLETENESS_WINDOW_MIN);
+    // same horizon as the other charts: from the first tick still in history to now
+    const firstTick = sim.history.length ? sim.history[0].tick : sim.tick;
+    const minutes = Math.floor((sim.tick - 1) / COHORT_TICKS) - Math.floor((firstTick - 1) / COHORT_TICKS) + 1;
+    const cohorts = sim.completeness(Math.max(1, minutes));
     charts.completeness.setData(cohorts);
     charts.completeness.draw();
     const through = completeThrough(cohorts);
     $('#completeness-note').textContent = through
-      ? `complete (≥99%) through ${fmtDur(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))} ago · last 6 h`
-      : 'nothing fully processed yet · last 6 h';
+      ? `complete (≥99%) through ${fmtDur(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))} ago`
+      : 'nothing fully processed yet';
     const f = sim.last;
     $('#fresh-note').textContent = `now: P50 ${fmtDur(f.fresh50)} · P90 ${fmtDur(f.fresh90)} · P99 ${fmtDur(f.fresh99)} · 3-min windows`;
   }
