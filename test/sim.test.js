@@ -421,6 +421,26 @@ test('in-flight age: counts match the backlog and percentiles are ordered', () =
   assert.ok(Math.abs(sim.last.inflight99 - p[99]) <= 6, `${sim.last.inflight99} vs ${p[99]}`);
 });
 
+test('stalls record whether they are on a conversion of death', () => {
+  const sim = new Simulation({ seed: 82 });
+  const seen = { plain: 0, poison: 0 };
+  const tally = () => {
+    for (const w of sim.workers) {
+      const b = w.bundle;
+      if (b && b.stallLeft > 0) seen[b.stallPoison ? 'poison' : 'plain']++;
+    }
+  };
+  for (let i = 0; i < 1500; i++) { sim.step(); tally(); }
+  // only the configured expensive conversions so far: none flagged
+  assert.ok(seen.plain > 0, `plain ${seen.plain}`);
+  assert.equal(seen.poison, 0);
+  sim.update({ expensiveFraction: 0 });
+  sim.addIncident('poison', { share: 0.0005, cost: 60 }, 300);
+  seen.plain = 0;
+  for (let i = 0; i < 900; i++) { sim.step(); tally(); }
+  assert.ok(seen.poison > 0, `poison ${seen.poison}`);
+});
+
 test('a single stall never exceeds the cap', () => {
   const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
   run(sim, 400);

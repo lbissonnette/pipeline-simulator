@@ -187,7 +187,7 @@
   const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
   const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
   const FRESH_LEVELS = [50, 90, 99];
-  const FRESH_WINDOW = 3;          // cohorts per fresh-time window (3 minutes)
+  const FRESH_WINDOW = 5;          // cohorts per fresh-time window (5 minutes)
   const cohortOf = tick => Math.floor((tick - 1) / COHORT_TICKS);
 
   // ---------- simulation ----------
@@ -432,7 +432,7 @@
         createdTick: cohorts.length ? cohorts[0].firstTick : this.tick,
         cutTick: this.tick, dispatchedTick: null,
         worker: cfg.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
-        expensive: k + poisoned, poisoned, stalls, stallLeft: 0, // stall points { at, cost } and ticks left in the current stall
+        expensive: k + poisoned, poisoned, stalls, stallLeft: 0, stallPoison: false, // stall points { at, cost, poison? }, ticks left in the current stall and whether it is a conversion of death
         extraTicks: stalls.reduce((s, x) => s + x.cost, 0),
       };
       this.intake.items -= size;
@@ -692,7 +692,9 @@
         if (b.stalls.length && done + take >= b.stalls[0].at) {
           // reach the expensive conversion, then stall for its cost
           take = Math.max(0, Math.min(take, b.stalls[0].at - done));
-          b.stallLeft = b.stalls.shift().cost;
+          const s = b.stalls.shift();
+          b.stallLeft = s.cost;
+          b.stallPoison = !!s.poison;
         }
         b.remaining -= take;
         this.creditProcessed(b, take);

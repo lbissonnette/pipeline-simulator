@@ -62,20 +62,6 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  // 1,200-conversion bundles (20 min of work) plus ~1.8 expensive conversions at
-  // 2 ± 3 min each: end-to-end median ~23 min, p99 ~45 min, capacity ~8,600/tick.
-  const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1024, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0015, expensiveCost: 12, expensiveCostSd: 18 };
-  const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
-  const PRESETS = {
-    // normal operation keeps ~60% of the pool busy (rho 0.6)
-    healthy:    Object.assign({}, BASE, { arrivalRate: 5200, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 10400, dist: NORMAL }),
-    // no expensive conversions: every bundle takes ~20 min; capacity ~10,200/tick
-    clean:      Object.assign({}, BASE, { arrivalRate: 6150, expensiveFraction: 0, dist: NORMAL }),
-    sticky:     Object.assign({}, BASE, { arrivalRate: 5200, routing: 'sticky', dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 5200, waveAmplitude: 0.6, dist: NORMAL }),
-  };
-
   // ---------- controls ----------
   function fmtParam(name, v) {
     switch (name) {
@@ -129,22 +115,7 @@
     updateCapacity();
   }
 
-  function applyToControls(cfg) {
-    for (const el of $$('[data-param]')) {
-      if (cfg[el.dataset.param] !== undefined) el.value = cfg[el.dataset.param];
-    }
-    if (cfg.dist) {
-      for (const el of $$('[data-dist]')) {
-        if (cfg.dist[el.dataset.dist] !== undefined) el.value = cfg.dist[el.dataset.dist];
-      }
-    }
-    readControlsIntoSim();
-  }
-
-  $$('[data-param], [data-dist]').forEach(el => el.addEventListener('input', () => {
-    $$('.chip.active').forEach(c => c.classList.remove('active'));
-    readControlsIntoSim();
-  }));
+  $$('[data-param], [data-dist]').forEach(el => el.addEventListener('input', readControlsIntoSim));
 
   // Warn when both the dispatcher and the degradation target the lowest indices.
   function updateDegradeWarning() {
@@ -153,20 +124,14 @@
   }
   $('#degrade-sel').addEventListener('change', updateDegradeWarning);
 
-  $$('[data-preset]').forEach(btn => btn.addEventListener('click', () => {
-    applyToControls(PRESETS[btn.dataset.preset]);
-    $$('.chip.active').forEach(c => c.classList.remove('active'));
-    btn.classList.add('active');
-  }));
-
   $$('[data-incident]').forEach(btn => btn.addEventListener('click', () => {
     const type = btn.dataset.incident;
     const num = id => parseFloat($(id).value);
-    const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
-    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
-    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, mins('#degrade-dur'));
-    else if (type === 'poison') sim.addIncident('poison', { share: num('#poison-share') / 100, cost: Math.round(num('#poison-cost') * TICKS_PER_MIN) }, mins('#poison-dur'));
-    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
+    const hours = id => Math.max(1, Math.round(num(id) * TICKS_PER_HOUR));
+    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), hours('#spike-dur'));
+    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, hours('#degrade-dur'));
+    else if (type === 'poison') sim.addIncident('poison', { share: num('#poison-share') / 100, cost: Math.round(num('#poison-cost') * TICKS_PER_MIN) }, hours('#poison-dur'));
+    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, hours('#delay-dur'));
     renderIncidents();
     if (!playing) render(true);
   }));
@@ -527,7 +492,7 @@
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fillRect(x + 1, y + cell - bh - 1, Math.round((cell - 2) * p), bh);
-        if (b.stallLeft > 0 && !offline) {
+        if (b.stallLeft > 0 && b.stallPoison && !offline) {
           const d = Math.max(3, Math.round(cell * 0.3));
           ctx.fillStyle = C.s2;
           ctx.fillRect(x + cell - d - 1, y + 1, d, d);
@@ -942,7 +907,6 @@
   // ---------- boot ----------
   buildRamp();
   readControlsIntoSim();
-  $('.chip[data-preset="healthy"]').classList.add('active');
   $('#speed-out').textContent = speedLabel(ticksPerSecond);
   render(true);
   setPlaying(true);

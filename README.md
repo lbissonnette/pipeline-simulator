@@ -20,7 +20,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   by default, up to 2,048) and a "done" sink. Each busy cell's colour is how
   long it has been working on its bundle (light = fresh, dark = twice the
   expected bundle time); the white bar at the bottom is progress on that
-  bundle; hatched cells are offline. The dispatcher turns red when its queue is full and the
+  bundle; a red corner mark means the worker is stalled on a conversion of
+  death; hatched cells are offline. The dispatcher turns red when its queue is full and the
   bundler shows "blocked". Dots animate bundles moving between stages. Hover a
   cell for its current bundle, last-tick rate and speed factor.
 - **KPI row** – backlog (with change over the past hour), age of the oldest
@@ -33,13 +34,12 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   header shows the most recent minute through which everything is at least
   99% complete. Hover for the
   minute's arrived and processed counts.
-- **Fresh time** – P50, P90 and P99 over time. A 3-minute window slides over
+- **Fresh time** – P50, P90 and P99 over time. A 5-minute window slides over
   the arrival minutes; each window's completeness is processed ÷ arrived across
-  its three minutes. The P99 fresh time is the age of the oldest window still
+  its five minutes. The P99 fresh time is the age of the oldest window still
   below 99% complete (P90 and P50 likewise), counted from the start of the
   window's oldest minute. Recomputed every simulated minute; 0 means every
-  window has passed that threshold. Under the Healthy preset it settles near
-  P50 1h, P90 1h48m, P99 2h.
+  window has passed that threshold.
 - **Age of in-flight data** – a histogram of how old the conversions still in
   the system are (held upstream, at the bundler, in the dispatcher, or inside a
   bundle being processed), plus P50/P90/P99 of that age over time.
@@ -65,18 +65,16 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
 | | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
-| Incidents | Traffic spike | Multiply arrivals for N minutes. |
-| | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N minutes. A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
-| | Conversion of Death | For N minutes, an extra share of arriving conversions are expensive at a fixed cost you choose, on top of the configured ones. The tag follows arrival time through the bundler and any upstream hold. |
-| | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
+| Incidents | Traffic spike | Multiply arrivals for N hours. |
+| | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N hours. A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
+| | Conversion of Death | For N hours, an extra share of arriving conversions are expensive at a fixed cost you choose, on top of the configured ones. The tag follows arrival time through the bundler and any upstream hold. |
+| | Upstream delay | Hold arrivals for N hours, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,024, a 32 × 32 grid); can be changed live. |
 | | Bundle size | Conversions per bundle (default 1,200, so the work itself takes ~20 min at 10 per tick). |
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
 
-Presets: **Healthy** (ρ ≈ 0.6), **Overloaded** (ρ ≈ 1.2), **No expensive
-tail** (every bundle takes ~20 min), **Sticky partitions** and **Bursty
-traffic**. The speed control runs from 1 simulated minute per real
+The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
 tick.
 
@@ -126,7 +124,7 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
    is what the completeness chart plots. `Simulation#freshTimes(levels,
    windowCohorts)` returns the fresh time in ticks per level (default levels
-   50, 90 and 99 over 3-minute windows); each tick's snapshot carries the
+   50, 90 and 99 over 5-minute windows); each tick's snapshot carries the
    latest values as `fresh50`, `fresh90` and `fresh99`. Every bundle
    completion is kept for 7 days as `{ tick, latency, size }`;
    `Simulation#latencySamples(windowTicks)` returns the ones within a window.
