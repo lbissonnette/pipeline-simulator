@@ -296,3 +296,18 @@ test('degrade can target the lowest x% of workers by index', () => {
   const rnd = sim.addIncident('degrade', { factor: 0.5, fraction: 0.2, selection: 'random' }, 60);
   assert.notDeepEqual(rnd.workers.slice().sort((a, b) => a - b), inc.workers);
 });
+
+test('completions are retained for the window and can be sliced by recency', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 61, completionRetention: 3000 });
+  run(sim, 5000);
+  const all = sim.latencySamples(1e9);
+  assert.ok(all.length > 0);
+  assert.ok(all.every(c => c.tick > sim.tick - 3000), 'old completions should be pruned');
+  const recent = sim.latencySamples(600);
+  assert.ok(recent.length > 0 && recent.length < all.length);
+  assert.ok(recent.every(c => c.tick > sim.tick - 600));
+  // per-bundle latency near 2 h under healthy load, weighted by size
+  const w = recent.reduce((s, c) => s + c.size, 0);
+  const mean = recent.reduce((s, c) => s + c.latency * c.size, 0) / w;
+  assert.ok(mean > 720 && mean < 780, `mean latency ${mean}`);
+});

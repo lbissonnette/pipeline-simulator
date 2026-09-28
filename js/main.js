@@ -601,6 +601,53 @@
     format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_MIN),
   }));
 
+  // ---------- E2E processing-time histogram (6 h vs 7 d) ----------
+  const HIST_WINDOWS = [
+    { key: '6h', name: 'last 6 h', color: '--s1', ticks: 6 * TICKS_PER_HOUR },
+    { key: '7d', name: 'last 7 d', color: '--s2', ticks: 7 * 24 * TICKS_PER_HOUR },
+  ];
+  const BIN_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120];
+  const histChart = new Histogram($('#chart-hist'), {
+    xLabel: v => fmtDur(v * TICKS_PER_MIN),
+    xTicks: (x0, x1) => timeTicks(x0 * TICKS_PER_MIN, x1 * TICKS_PER_MIN).map(t => ({ value: t.value / TICKS_PER_MIN, label: t.label })),
+    countLabel: 'conversions',
+  });
+
+  function weightedPct(samples, p) {
+    if (!samples.length) return null;
+    const sorted = samples.slice().sort((a, b) => a.latency - b.latency);
+    const total = sorted.reduce((s, c) => s + c.size, 0);
+    let acc = 0;
+    for (const c of sorted) { acc += c.size; if (acc >= p * total) return c.latency; }
+    return sorted[sorted.length - 1].latency;
+  }
+
+  function renderHistogram() {
+    const sets = HIST_WINDOWS.map(w => Object.assign({}, w, { samples: sim.latencySamples(w.ticks) }));
+    let maxLat = 0;
+    for (const s of sets) for (const c of s.samples) if (c.latency > maxLat) maxLat = c.latency;
+    const maxMin = Math.max(30, maxLat / TICKS_PER_MIN);
+    let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
+    for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
+    const nBins = Math.ceil(maxMin / binMin) + 1;
+    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin }));
+    const series = sets.map(s => {
+      const counts = new Array(nBins).fill(0);
+      let total = 0;
+      for (const c of s.samples) {
+        const i = Math.min(nBins - 1, Math.floor(c.latency / TICKS_PER_MIN / binMin));
+        counts[i] += c.size; total += c.size;
+      }
+      return { name: s.name, color: s.color, counts, values: counts.map(v => total ? (100 * v) / total : 0) };
+    });
+    histChart.setData({ bins, series });
+    histChart.draw();
+    for (const s of sets) {
+      $(`#hist-${s.key}-p50`).textContent = fmtDurFixed(weightedPct(s.samples, 0.5));
+      $(`#hist-${s.key}-p95`).textContent = fmtDurFixed(weightedPct(s.samples, 0.95));
+    }
+  }
+
   // Most recent arrival minute at which it and every older minute are >= 99% processed.
   function completeThrough(rows) {
     let through = null;
@@ -725,6 +772,7 @@
     $('#fresh-p50').textContent = fmtDurFixed(f.fresh50);
     $('#fresh-p90').textContent = fmtDurFixed(f.fresh90);
     $('#fresh-p99').textContent = fmtDurFixed(f.fresh99);
+    renderHistogram();
   }
 
   window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });

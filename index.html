@@ -235,6 +235,16 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-fresh"></canvas></div>
       </div>
+      <div class="card wide">
+        <div class="card-head"><h2>End-to-end processing time distribution</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>last 6 h</span>
+            <span class="lg-item"><i class="sw s2 outline"></i>last 7 d</span>
+            <span class="unit" id="hist-note">6 h: p50 <b class="num" id="hist-6h-p50">–</b> · p95 <b class="num" id="hist-6h-p95">–</b> &nbsp;|&nbsp; 7 d: p50 <b class="num" id="hist-7d-p50">–</b> · p95 <b class="num" id="hist-7d-p95">–</b></span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-hist"></canvas></div>
+      </div>
       <div class="card">
         <div class="card-head"><h2>Backlog over time</h2><span class="unit">conversions in the system</span></div>
         <div class="chart-wrap"><canvas id="chart-backlog"></canvas></div>
@@ -290,6 +300,7 @@
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
         <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
         <li><b>Degraded workers</b> picks a share of the pool, either at random or the lowest-numbered workers, and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
+        <li><b>Processing time distribution</b> bins the end-to-end time of every bundle completed in the last 6 hours and in the last 7 days, weighted by the conversions in each bundle and normalised to each window's own total, so the two shapes are comparable even though the 7-day set is far larger. Bin width adapts to the widest latency seen.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>
       </ul>
     </details>

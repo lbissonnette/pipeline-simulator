@@ -145,6 +145,7 @@
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     heterogeneity: 0,          // sd of per-worker permanent speed multiplier
     historyLength: 4320,       // 12 h
+    completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
     seed: 42,
   };
 
@@ -181,6 +182,8 @@
       this.intake = { items: 0, oldestTick: null, cohorts: [] };
       this.held = { items: 0, oldestTick: null, cohorts: [] };   // upstream-delay holding area
       this.cohorts = new Map();   // cohort -> { arrived, processed }
+      this.completions = [];      // { tick, latency, size } per finished bundle, oldest first
+      this.completionsHead = 0;   // index of the oldest retained completion
       this.fresh = null;          // cached freshTimes(), refreshed every cohort
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
@@ -411,6 +414,27 @@
       }
     }
 
+    // Drop completions older than the retention window. A moving head index
+    // avoids shifting a large array every tick.
+    pruneCompletions() {
+      const cutoff = this.tick - this.config.completionRetention;
+      const c = this.completions;
+      while (this.completionsHead < c.length && c[this.completionsHead].tick <= cutoff) this.completionsHead++;
+      if (this.completionsHead > 20000) {
+        this.completions = c.slice(this.completionsHead);
+        this.completionsHead = 0;
+      }
+    }
+
+    // Bundle completions within the last `windowTicks`, oldest first.
+    latencySamples(windowTicks) {
+      const cutoff = this.tick - windowTicks;
+      const c = this.completions;
+      let i = this.completionsHead;
+      while (i < c.length && c[i].tick <= cutoff) i++;
+      return c.slice(i);
+    }
+
     // Completeness per arrival cohort for the last `count` cohorts:
     // [{ cohort, tick, arrived, processed, pct }], oldest first.
     completeness(count) {
@@ -569,6 +593,7 @@
           w.bundle = null;
           w.completed++;
           latencies.push(t - b.createdTick);
+          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size });
           this.totals.bundlesCompleted++;
           this.events.push({ type: 'complete', worker: w.id });
         }
@@ -576,6 +601,7 @@
       this.totals.processed += processed;
 
       if (!this.fresh || t % COHORT_TICKS === 0) this.fresh = this.freshTimes();
+      this.pruneCompletions();
 
       const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed);
       this.history.push(snap);

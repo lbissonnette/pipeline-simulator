@@ -40,6 +40,12 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   window's oldest minute. Recomputed every simulated minute; 0 means every
   window has passed that threshold. Under the Healthy preset it settles near
   P50 1h, P90 1h48m, P99 2h.
+- **End-to-end processing time distribution** – a histogram of bundle
+  end-to-end time for the last 6 hours and the last 7 days on the same axes.
+  Each window is weighted by conversions and normalised to its own total, so
+  the shapes are comparable although the 7-day set is far larger. Bin width
+  adapts to the widest latency seen; the header shows each window's p50 and
+  p95.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, latency percentiles, dispatcher queue depth, and busy share.
   Hover for exact values.
@@ -106,7 +112,9 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    is what the completeness chart plots. `Simulation#freshTimes(levels,
    windowCohorts)` returns the fresh time in ticks per level (default levels
    50, 90 and 99 over 3-minute windows); each tick's snapshot carries the
-   latest values as `fresh50`, `fresh90` and `fresh99`.
+   latest values as `fresh50`, `fresh90` and `fresh99`. Every bundle
+   completion is kept for 7 days as `{ tick, latency, size }`;
+   `Simulation#latencySamples(windowTicks)` returns the ones within a window.
 
 Everything is driven by a seeded PRNG, so a given seed plus the same sequence of
 clicks reproduces the same run.
@@ -124,7 +132,7 @@ npm start       # serve locally
 - `js/main.js` – controls, stage rendering, KPIs.
 - `test/sim.test.js` – conservation, dispatcher bound, one bundle per worker,
   determinism, stability under/over load, incidents, distribution means,
-  per-minute completeness, fresh-time percentiles.
+  per-minute completeness, fresh-time percentiles, completion retention.
 
 A GitHub Pages workflow (`.github/workflows/pages.yml`) runs the tests and
 publishes the site from `main`. It stamps the commit hash onto the script and
