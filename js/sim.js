@@ -158,6 +158,8 @@
 
   const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
   const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
+  const FRESH_LEVELS = [50, 90, 99];
+  const FRESH_WINDOW = 3;          // cohorts per fresh-time window (3 minutes)
   const cohortOf = tick => Math.floor((tick - 1) / COHORT_TICKS);
 
   // ---------- simulation ----------
@@ -178,6 +180,7 @@
       this.intake = { items: 0, oldestTick: null, cohorts: [] };
       this.held = { items: 0, oldestTick: null, cohorts: [] };   // upstream-delay holding area
       this.cohorts = new Map();   // cohort -> { arrived, processed }
+      this.fresh = null;          // cached freshTimes(), refreshed every cohort
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
       this.nextIncidentId = 1;
@@ -370,6 +373,36 @@
       return out;
     }
 
+    // "Fresh time" at percentile levels. Slide a window of `windowCohorts`
+    // arrival minutes from oldest to newest; a window's completeness is
+    // processed / arrived over those minutes. The P<L> fresh time is the age
+    // (ticks since the window's oldest minute began) of the oldest window that
+    // is less than L% complete. 0 means every window is at least L% complete.
+    freshTimes(levels, windowCohorts) {
+      levels = levels || FRESH_LEVELS;
+      windowCohorts = windowCohorts || FRESH_WINDOW;
+      const now = cohortOf(Math.max(1, this.tick));
+      const oldest = Math.max(0, now - COHORT_HISTORY + 1);
+      const result = {};
+      const pending = new Set(levels);
+      let sa = 0, sp = 0;
+      const q = [];
+      for (let c = oldest; c <= now && pending.size; c++) {
+        const s = this.cohorts.get(c);
+        const a = s ? s.arrived : 0, p = s ? Math.min(s.processed, a) : 0;
+        q.push([a, p]); sa += a; sp += p;
+        if (q.length > windowCohorts) { const [da, dp] = q.shift(); sa -= da; sp -= dp; }
+        if (q.length < windowCohorts || sa <= 0) continue;
+        const pct = (100 * sp) / sa;
+        const age = this.tick - (c - windowCohorts + 1) * COHORT_TICKS;
+        for (const L of Array.from(pending)) {
+          if (pct < L) { result[L] = age; pending.delete(L); }
+        }
+      }
+      for (const L of pending) result[L] = 0;
+      return result;
+    }
+
     // ---------- dispatcher ----------
     isIdle(w) { return w.bundle === null && w.offlineUntil < this.tick; }
 
@@ -482,6 +515,8 @@
       }
       this.totals.processed += processed;
 
+      if (!this.fresh || t % COHORT_TICKS === 0) this.fresh = this.freshTimes();
+
       const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut);
       this.history.push(snap);
       if (this.history.length > cfg.historyLength) this.history.shift();
@@ -525,6 +560,9 @@
         maxBundleAge: maxAge,
         latencyP50: pct(0.5), latencyP95: pct(0.95), latencyMax: latencies.length ? latencies[latencies.length - 1] : null,
         latencies,
+        fresh50: this.fresh ? this.fresh[50] : 0,
+        fresh90: this.fresh ? this.fresh[90] : 0,
+        fresh99: this.fresh ? this.fresh[99] : 0,
         completedBundles: latencies.length,
         busy, offline, idle: n - busy - offline,
         utilization: n - offline > 0 ? busy / (n - offline) : 0,
@@ -543,7 +581,7 @@
   }
 
   return {
-    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, COHORT_TICKS, makeRng, sampleRate,
+    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, COHORT_TICKS, FRESH_LEVELS, FRESH_WINDOW, makeRng, sampleRate,
     expectedRate, expectedBundleTicks: expectedBundleTicksCached,
   };
 });

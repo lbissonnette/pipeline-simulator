@@ -33,6 +33,13 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   persist until those cohorts catch up. The header shows the most recent
   minute through which everything is at least 99% complete. Hover for the
   minute's arrived and processed counts.
+- **Fresh time** – P50, P90 and P99 over time. A 3-minute window slides over
+  the arrival minutes; each window's completeness is processed ÷ arrived across
+  its three minutes. The P99 fresh time is the age of the oldest window still
+  below 99% complete (P90 and P50 likewise), counted from the start of the
+  window's oldest minute. Recomputed every simulated minute; 0 means every
+  window has passed that threshold. Under the Healthy preset it settles near
+  P50 1h, P90 1h48m, P99 2h.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, latency percentiles, dispatcher queue depth, and busy share.
   Hover for exact values.
@@ -96,7 +103,10 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    As a worker makes progress on a bundle, processed conversions are credited
    to the bundle's cohorts oldest-minute first. `Simulation#completeness(n)`
    returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
-   is what the completeness chart plots.
+   is what the completeness chart plots. `Simulation#freshTimes(levels,
+   windowCohorts)` returns the fresh time in ticks per level (default levels
+   50, 90 and 99 over 3-minute windows); each tick's snapshot carries the
+   latest values as `fresh50`, `fresh90` and `fresh99`.
 
 Everything is driven by a seeded PRNG, so a given seed plus the same sequence of
 clicks reproduces the same run.
@@ -114,7 +124,7 @@ npm start       # serve locally
 - `js/main.js` – controls, stage rendering, KPIs.
 - `test/sim.test.js` – conservation, dispatcher bound, one bundle per worker,
   determinism, stability under/over load, incidents, distribution means,
-  per-minute completeness.
+  per-minute completeness, fresh-time percentiles.
 
 A GitHub Pages workflow (`.github/workflows/pages.yml`) runs the tests and
 publishes the site from `main`. It stamps the commit hash onto the script and

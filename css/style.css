@@ -11,6 +11,7 @@
   --axis: #c3c2b7;
   --s1: #2a78d6;
   --s2: #eb6834;
+  --s3: #1baf7a;
   --accent: #2a78d6;
   --accent-ink: #ffffff;
   --cell-idle: #e9e8e2;
@@ -37,6 +38,7 @@
     --axis: #383835;
     --s1: #3987e5;
     --s2: #d95926;
+    --s3: #199e70;
     --accent: #3987e5;
     --cell-idle: #2a2a28;
     --cell-offline: #383835;
@@ -172,6 +174,7 @@ button, input, select { font: inherit; color: inherit; }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
 .sw.s1 { background: var(--s1); }
 .sw.s2 { background: var(--s2); }
+.sw.s3 { background: var(--s3); }
 .sw.ref { background: var(--axis); height: 2px; width: 14px; border-radius: 1px; }
 .sw.idle { background: var(--cell-idle); }
 .sw.offline { background: repeating-linear-gradient(45deg, var(--cell-offline) 0 3px, var(--cell-offline-ink) 3px 4px); }

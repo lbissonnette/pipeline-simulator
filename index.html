@@ -226,6 +226,17 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-completeness"></canvas></div>
       </div>
+      <div class="card wide">
+        <div class="card-head"><h2>Fresh time</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>P50</span>
+            <span class="lg-item"><i class="sw s2"></i>P90</span>
+            <span class="lg-item"><i class="sw s3"></i>P99</span>
+            <span class="unit" id="fresh-note">minutes · how far back data is still less than that percent complete</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-fresh"></canvas></div>
+      </div>
       <div class="card">
         <div class="card-head"><h2>Backlog over time</h2><span class="unit">conversions in the system</span></div>
         <div class="chart-wrap"><canvas id="chart-backlog"></canvas></div>
@@ -279,6 +290,7 @@
         <li><b>Processing</b>: each worker holds one bundle. Every tick it draws a rate in conversions per tick from the distribution, multiplies by its permanent speed factor and any slowdown, and completes that many conversions. With the defaults (10 per tick, 7,200 per bundle) a bundle takes about 2 hours. When it is done the worker takes the next bundle on the following tick.</li>
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, estimated by simulation. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute in the last 6 hours, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
+        <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>
       </ul>
     </details>

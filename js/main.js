@@ -563,6 +563,14 @@
       extraRows: row => [['Arrived', fmt(row.arrived)], ['Processed', fmt(row.processed)]],
     })),
   };
+  charts.fresh = new LineChart($('#chart-fresh'), Object.assign({}, timeOpts, {
+    series: [
+      { key: 'fresh50Min', name: 'P50', color: '--s1' },
+      { key: 'fresh90Min', name: 'P90', color: '--s2' },
+      { key: 'fresh99Min', name: 'P99', color: '--s3' },
+    ],
+    format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_MIN),
+  }));
   const COMPLETENESS_WINDOW_MIN = 6 * 60;
 
   // Most recent arrival minute at which it and every older minute are >= 99% processed.
@@ -602,6 +610,7 @@
       out[i] = Object.assign({}, h, {
         arrivals: sa / q.length, processed: sp / q.length, utilPct: h.utilization * 100,
         latP50Min: p50, latP95Min: p95,
+        fresh50Min: h.fresh50 / TICKS_PER_MIN, fresh90Min: h.fresh90 / TICKS_PER_MIN, fresh99Min: h.fresh99 / TICKS_PER_MIN,
       });
     }
     return out;
@@ -656,6 +665,8 @@
     $('#completeness-note').textContent = through
       ? `complete (≥99%) through ${fmtDur(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))} ago · last 6 h`
       : 'nothing fully processed yet · last 6 h';
+    const f = sim.last;
+    $('#fresh-note').textContent = `now: P50 ${fmtDur(f.fresh50)} · P90 ${fmtDur(f.fresh90)} · P99 ${fmtDur(f.fresh99)} · 3-min windows`;
   }
 
   window.addEventListener('resize', () => { drawDistribution(); render(); });

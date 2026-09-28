@@ -203,3 +203,39 @@ test('upstream delay keeps held conversions in their original arrival minute', (
     assert.ok(r.pct > 99.9, `held cohort ${r.cohort} at ${r.pct}`);
   }
 });
+
+test('fresh time percentiles: ordered, and near the 2 h ramp under healthy load', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 31 });
+  run(sim, 5 * 360);
+  const f = sim.freshTimes();
+  const min = t => t / 6;
+  assert.ok(f[99] >= f[90] && f[90] >= f[50], `order ${JSON.stringify(f)}`);
+  // completeness of data aged a is ~ a / 2h, so P50 ~ 60 min, P90 ~ 108, P99 ~ 119
+  assert.ok(Math.abs(min(f[50]) - 60) < 8, `p50 ${min(f[50])} min`);
+  assert.ok(Math.abs(min(f[90]) - 108) < 8, `p90 ${min(f[90])} min`);
+  assert.ok(Math.abs(min(f[99]) - 119) < 8, `p99 ${min(f[99])} min`);
+  // snapshot carries the same numbers
+  assert.equal(sim.last.fresh99, f[99]);
+});
+
+test('fresh time grows during an outage and recovers afterwards', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 32 });
+  run(sim, 4 * 360);
+  const before = sim.freshTimes()[99];
+  sim.addIncident('outage', 0.5, 360); // half the pool offline for an hour
+  run(sim, 360 + 360);
+  const during = sim.freshTimes()[99];
+  assert.ok(during > before + 60, `p99 ${during} vs ${before}`);
+  run(sim, 8 * 360);
+  const after = sim.freshTimes()[99];
+  assert.ok(Math.abs(after - before) < 60, `recovered p99 ${after} vs ${before}`);
+});
+
+test('fresh time is zero when everything is complete', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 33 });
+  run(sim, 600);
+  sim.update({ arrivalRate: 0 });
+  run(sim, 2000);
+  const f = sim.freshTimes();
+  assert.deepEqual(f, { 50: 0, 90: 0, 99: 0 });
+});
