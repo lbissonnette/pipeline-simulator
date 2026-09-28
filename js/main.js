@@ -67,12 +67,13 @@
   const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1024, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0015, expensiveCost: 12, expensiveCostSd: 18 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
-    healthy:    Object.assign({}, BASE, { arrivalRate: 6900, dist: NORMAL }),
+    // normal operation keeps ~60% of the pool busy (rho 0.6)
+    healthy:    Object.assign({}, BASE, { arrivalRate: 5200, dist: NORMAL }),
     overloaded: Object.assign({}, BASE, { arrivalRate: 10400, dist: NORMAL }),
     // no expensive conversions: every bundle takes ~20 min; capacity ~10,200/tick
-    clean:      Object.assign({}, BASE, { arrivalRate: 8200, expensiveFraction: 0, dist: NORMAL }),
-    sticky:     Object.assign({}, BASE, { arrivalRate: 6900, routing: 'sticky', dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 6900, waveAmplitude: 0.6, dist: NORMAL }),
+    clean:      Object.assign({}, BASE, { arrivalRate: 6150, expensiveFraction: 0, dist: NORMAL }),
+    sticky:     Object.assign({}, BASE, { arrivalRate: 5200, routing: 'sticky', dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 5200, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------
@@ -164,6 +165,7 @@
     const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
     if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
     else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, mins('#degrade-dur'));
+    else if (type === 'poison') sim.addIncident('poison', { share: num('#poison-share') / 100, cost: Math.round(num('#poison-cost') * TICKS_PER_MIN) }, mins('#poison-dur'));
     else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
     renderIncidents();
     if (!playing) render(true);
@@ -174,6 +176,7 @@
     degrade: i => (i.factor === 0
       ? `Outage: ${fmtInt(i.workers.length)} workers offline`
       : `Degraded: ${fmtInt(i.workers.length)} workers at ×${i.factor}`) + (i.selection === 'lowest' ? ' (lowest index)' : ''),
+    poison: i => `Conversions of death: +${(i.magnitude.share * 100).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}% at ${fmtDur(i.magnitude.cost)}`,
     upstreamDelay: () => 'Upstream delay (holding arrivals)',
   };
 
@@ -605,7 +608,7 @@
     tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : df < 1 ? ` · slowed ×${df.toFixed(2)}` : b ? '' : ' · idle'}</div>` +
       (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
            `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` +
-           `<div class="tt-row"><span>Expensive conversions</span><b>${b.expensive}${b.stallLeft > 0 ? ` · stalled, ${fmtDur(b.stallLeft)} left` : b.stalls.length ? ` · ${b.stalls.length} ahead` : ''}</b></div>` : '') +
+           `<div class="tt-row"><span>Expensive conversions</span><b>${b.expensive}${b.poisoned ? ` (${b.poisoned} of death)` : ''}${b.stallLeft > 0 ? ` · stalled, ${fmtDur(b.stallLeft)} left` : b.stalls.length ? ` · ${b.stalls.length} ahead` : ''}</b></div>` : '') +
       `<div class="tt-row"><span>Last tick rate</span><b>${w.lastRate.toFixed(1)} conversions</b></div>` +
       `<div class="tt-row"><span>Completed</span><b>${w.completed} bundles · ${fmt(w.processed)} conv.</b></div>`;
     tooltip.hidden = false;
@@ -652,7 +655,7 @@
 
   // ---------- E2E processing-time histogram (6 h vs 7 d) ----------
   const HIST_WINDOWS = [
-    { key: '6h', name: 'last 6 h', color: '--s1', ticks: 6 * TICKS_PER_HOUR },
+    { key: '12h', name: 'last 12 h', color: '--s1', ticks: 12 * TICKS_PER_HOUR },
     { key: '7d', name: 'last 7 d', color: '--s2', ticks: 7 * 24 * TICKS_PER_HOUR },
   ];
   const BIN_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120];

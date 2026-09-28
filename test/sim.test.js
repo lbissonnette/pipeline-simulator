@@ -23,7 +23,7 @@ test('defaults describe the intended scale', () => {
   const sim = new Simulation();
   assert.equal(sim.workers.length, N);
   assert.ok(Math.abs(sim.last.nominalCapacity - CAP) < CAP * 0.02, `capacity ${sim.last.nominalCapacity}`);
-  assert.ok(Math.abs(sim.last.load - 0.8) < 0.02, `load ${sim.last.load}`);
+  assert.ok(Math.abs(sim.last.load - 0.6) < 0.02, `load ${sim.last.load}`);
 });
 
 test('a bundle takes about bundleSize / mean ticks, plus the wasted tail', () => {
@@ -355,7 +355,30 @@ test('default distribution: end-to-end median ~23 min, p99 under an hour', () =>
   assert.ok(Math.abs(q(0.5) - 23) < 2, `median ${q(0.5)} min`);
   assert.ok(q(0.9) > 26 && q(0.9) < 35, `p90 ${q(0.9)} min`);
   assert.ok(q(0.99) > 35 && q(0.99) < 60, `p99 ${q(0.99)} min`);
-  assert.ok(sim.last.load > 0.75 && sim.last.load < 0.85, `load ${sim.last.load}`);
+  assert.ok(sim.last.load > 0.55 && sim.last.load < 0.65, `load ${sim.last.load}`);
+});
+
+test('conversion-of-death incident adds fixed-cost stalls while active', () => {
+  const sim = new Simulation({ seed: 81, expensiveFraction: 0 });
+  run(sim, 1500);
+  const before = sim.latencySamples(600);
+  // 0.05% at 10 min (about 0.6 per bundle), for 50 min
+  const inc = sim.addIncident('poison', { share: 0.0005, cost: 60 }, 300);
+  run(sim, 300 + 600); // let the poisoned bundles finish
+  const after = sim.latencySamples(900);
+  const poisoned = after.filter(c => c.expensive > 0);
+  assert.ok(before.every(c => c.expensive === 0));
+  assert.ok(poisoned.length > 300, `poisoned ${poisoned.length}`);
+  // each conversion of death adds exactly its cost (no spread)
+  const byK = new Map();
+  for (const c of poisoned) { if (!byK.has(c.expensive)) byK.set(c.expensive, []); byK.get(c.expensive).push(c.latency); }
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const base = mean(before.map(c => c.latency));
+  for (const [k, lats] of byK) if (lats.length >= 10) assert.ok(Math.abs(mean(lats) - base - k * 60) < 8, `k=${k}: ${mean(lats) - base}`);
+  // bundles cut after the incident ended are clean again
+  assert.equal(sim.incidents.length, 0);
+  run(sim, 300);
+  assert.ok(sim.latencySamples(60).every(c => c.expensive === 0));
 });
 
 test('a single stall never exceeds the cap', () => {

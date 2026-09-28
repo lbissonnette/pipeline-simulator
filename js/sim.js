@@ -145,7 +145,7 @@
   // 1,024 identical workers (a 32 x 32 grid) give ~8,600 conversions per tick.
   const DEFAULTS = {
     workers: 1024,
-    arrivalRate: 6900,         // mean conversions per tick (Poisson), rho ~0.8
+    arrivalRate: 5200,         // mean conversions per tick (Poisson), rho ~0.6
     waveAmplitude: 0,          // 0..1 modulation of arrivals
     wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
     bundleSize: 1200,          // conversions per bundle (20 min at 10/tick)
@@ -255,6 +255,10 @@
     //                       routing). selection 'random' (default) picks them
     //                       at random, 'lowest' takes the lowest indices.
     //       'upstreamDelay' arrivals are held until the incident ends
+    //       'poison'        magnitude = { share, cost }: while active, an extra
+    //                       `share` of conversions in each bundle cut are
+    //                       expensive at a fixed `cost` (ticks), on top of the
+    //                       configured expensive conversions
     //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
       if (type === 'outage') { type = 'degrade'; magnitude = { factor: 0, fraction: magnitude }; }
@@ -304,11 +308,13 @@
 
     activeModifiers() {
       let arrivalMult = 1, holdArrivals = false;
+      const poison = [];
       for (const inc of this.incidents) {
         if (inc.type === 'spike') arrivalMult *= inc.magnitude;
         else if (inc.type === 'upstreamDelay') holdArrivals = true;
+        else if (inc.type === 'poison') poison.push(inc.magnitude);
       }
-      return { arrivalMult, holdArrivals };
+      return { arrivalMult, holdArrivals, poison };
     }
 
     // Product of the factors of the degradations still covering the worker.
@@ -382,6 +388,14 @@
       for (let i = 0; i < k; i++) {
         stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd)) });
       }
+      // conversions of death: extra fixed-cost stalls while such an incident is active
+      let poisoned = 0;
+      for (const inc of this.incidents) {
+        if (inc.type !== 'poison') continue;
+        const n = Math.min(Math.round(size), this.rng.poisson(size * inc.magnitude.share));
+        for (let i = 0; i < n; i++) stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, inc.magnitude.cost), poison: true });
+        poisoned += n;
+      }
       stalls.sort((x, y) => x.at - y.at);
       const b = {
         id: this.nextBundleId++, size, remaining: size,
@@ -389,7 +403,7 @@
         createdTick: cohorts.length ? cohorts[0].firstTick : this.tick,
         cutTick: this.tick, dispatchedTick: null,
         worker: cfg.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
-        expensive: k, stalls, stallLeft: 0,       // stall points { at, cost } and ticks left in the current stall
+        expensive: k + poisoned, poisoned, stalls, stallLeft: 0, // stall points { at, cost } and ticks left in the current stall
         extraTicks: stalls.reduce((s, x) => s + x.cost, 0),
       };
       this.intake.items -= size;

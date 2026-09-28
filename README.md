@@ -41,7 +41,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   window has passed that threshold. Under the Healthy preset it settles near
   P50 1h, P90 1h48m, P99 2h.
 - **End-to-end processing time distribution** – a histogram of bundle
-  end-to-end time for the last 6 hours and the last 7 days on the same axes.
+  end-to-end time for the last 12 hours and the last 7 days on the same axes.
   Each window is weighted by conversions and normalised to its own total, so
   the shapes are comparable although the 7-day set is far larger. Bin width
   adapts to the widest latency seen; the header shows each window's p50 and
@@ -54,7 +54,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 
 | Group | Control | Effect |
 |---|---|---|
-| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 6,900 = 690/s. |
+| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 5,200 = 520/s, which keeps about 60% of the pool busy. |
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
@@ -63,13 +63,14 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
 | | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N minutes. A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
+| | Conversion of Death | For N minutes, an extra share of conversions are expensive at a fixed cost you choose, on top of the configured ones. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,024, a 32 × 32 grid); can be changed live. |
 | | Bundle size | Conversions per bundle (default 1,200, so the work itself takes ~20 min at 10 per tick). |
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
 
-Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **No expensive
+Presets: **Healthy** (ρ ≈ 0.6), **Overloaded** (ρ ≈ 1.2), **No expensive
 tail** (every bundle takes ~20 min), **Sticky partitions** and **Bursty
 traffic**. The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
