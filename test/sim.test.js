@@ -173,3 +173,33 @@ test('worker count can change while running without losing work', () => {
   run(sim, 500);
   invariants(sim);
 });
+
+test('per-minute completeness: cohorts conserve counts and age toward 100%', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 21 });
+  run(sim, 5 * 360); // 5 hours
+  const rows = sim.completeness(5 * 60);
+  const arrived = rows.reduce((s, r) => s + r.arrived, 0);
+  const processed = rows.reduce((s, r) => s + r.processed, 0);
+  assert.ok(Math.abs(arrived - sim.totals.arrived) < 1e-3, `arrived ${arrived} vs ${sim.totals.arrived}`);
+  assert.ok(Math.abs(processed - sim.totals.processed) < 1e-3, `processed ${processed} vs ${sim.totals.processed}`);
+  // the newest minute is barely processed, minutes older than ~2.5 h are done
+  assert.ok(rows[rows.length - 1].pct < 5, `newest ${rows[rows.length - 1].pct}`);
+  for (const r of rows.slice(0, 60)) assert.ok(r.pct > 99.9, `old cohort ${r.cohort} at ${r.pct}%`);
+  // completeness never exceeds 100 and is (weakly) higher for older cohorts in steady state
+  for (const r of rows) assert.ok(r.pct <= 100 + 1e-9);
+  const mid = rows.slice(60, 120).map(r => r.pct);
+  assert.ok(mid[0] >= mid[mid.length - 1] - 5, 'older cohorts should be at least as complete');
+});
+
+test('upstream delay keeps held conversions in their original arrival minute', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 22 });
+  run(sim, 600);
+  sim.addIncident('upstreamDelay', 1, 60);
+  run(sim, 30);
+  const heldRows = sim.completeness(5).slice(0, 4); // minutes fully inside the hold
+  for (const r of heldRows) { assert.ok(r.arrived > 40000); assert.equal(r.processed, 0); }
+  run(sim, 40 + 720 + 120); // release, process for well over a bundle time
+  for (const r of sim.completeness(200).filter(r => heldRows.some(h => h.cohort === r.cohort))) {
+    assert.ok(r.pct > 99.9, `held cohort ${r.cohort} at ${r.pct}`);
+  }
+});

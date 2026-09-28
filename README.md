@@ -26,6 +26,13 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   unprocessed conversion, p50/p95 end-to-end latency over a 30-minute window,
   arrivals and throughput per tick against expected capacity, dispatcher queue
   depth, and worker utilisation.
+- **Completeness by arrival minute** – for each simulated minute in the last
+  6 hours, the share of conversions that arrived in that minute which have been
+  processed so far. Older minutes sit at 100%, the newest near 0%, and the
+  slope between them is the processing front; incidents leave dents that
+  persist until those cohorts catch up. The header shows the most recent
+  minute through which everything is at least 99% complete. Hover for the
+  minute's arrived and processed counts.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, latency percentiles, dispatcher queue depth, and busy share.
   Hover for exact values.
@@ -84,6 +91,12 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    arrived to the tick it finished, so it includes time spent filling the
    bundle, waiting at the bundler and in the dispatcher, and being processed.
    Under the Healthy preset the median is a little over two hours.
+7. **Arrival cohorts**: every conversion is tagged with the minute it arrived
+   in, through the intake buffer (and the upstream-delay hold) into its bundle.
+   As a worker makes progress on a bundle, processed conversions are credited
+   to the bundle's cohorts oldest-minute first. `Simulation#completeness(n)`
+   returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
+   is what the completeness chart plots.
 
 Everything is driven by a seeded PRNG, so a given seed plus the same sequence of
 clicks reproduces the same run.
@@ -100,7 +113,8 @@ npm start       # serve locally
 - `js/charts.js` – small canvas line chart with crosshair tooltip.
 - `js/main.js` – controls, stage rendering, KPIs.
 - `test/sim.test.js` – conservation, dispatcher bound, one bundle per worker,
-  determinism, stability under/over load, incidents, distribution means.
+  determinism, stability under/over load, incidents, distribution means,
+  per-minute completeness.
 
 A GitHub Pages workflow (`.github/workflows/pages.yml`) runs the tests and
 publishes the site from `main`. It stamps the commit hash onto the script and

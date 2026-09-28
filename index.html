@@ -217,6 +217,15 @@
     </div>
 
     <div class="charts">
+      <div class="card wide">
+        <div class="card-head"><h2>Completeness by arrival minute</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>% of that minute's conversions processed</span>
+            <span class="unit" id="completeness-note">–</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-completeness"></canvas></div>
+      </div>
       <div class="card">
         <div class="card-head"><h2>Backlog over time</h2><span class="unit">conversions in the system</span></div>
         <div class="chart-wrap"><canvas id="chart-backlog"></canvas></div>
@@ -250,7 +259,7 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-dispatcher"></canvas></div>
       </div>
-      <div class="card">
+      <div class="card wide">
         <div class="card-head"><h2>Worker utilisation</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>busy share (%)</span>
@@ -269,6 +278,7 @@
         <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment.</li>
         <li><b>Processing</b>: each worker holds one bundle. Every tick it draws a rate in conversions per tick from the distribution, multiplies by its permanent speed factor and any slowdown, and completes that many conversions. With the defaults (10 per tick, 7,200 per bundle) a bundle takes about 2 hours. When it is done the worker takes the next bundle on the following tick.</li>
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, estimated by simulation. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
+        <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute in the last 6 hours, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>
       </ul>
     </details>

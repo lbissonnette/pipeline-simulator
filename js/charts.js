@@ -40,6 +40,8 @@
       this.xTicks = opts.xTicks || null;       // (firstTick, lastTick) => [{ value, label }]
       this.titleOf = opts.titleOf || (row => `Tick ${row.tick}`);
       this.format = opts.format || fmt;        // value formatter for tooltip
+      this.yMax = opts.yMax || null;           // fixed y axis top (else auto)
+      this.extraRows = opts.extraRows || null; // row => [[label, value], ...] appended to the tooltip
       this.hoverIndex = null;
       this.history = [];
       this.tooltip = document.createElement('div');
@@ -82,6 +84,11 @@
       if (this.reference) {
         html += `<div class="tt-row"><span class="tt-swatch tt-ref"></span><span>${this.reference.name}</span><b>${this.format(row[this.reference.key])}</b></div>`;
       }
+      if (this.extraRows) {
+        for (const [label, value] of this.extraRows(row)) {
+          html += `<div class="tt-row"><span class="tt-swatch" style="visibility:hidden"></span><span>${label}</span><b>${value}</b></div>`;
+        }
+      }
       this.tooltip.innerHTML = html;
       this.tooltip.hidden = false;
       const tw = this.tooltip.offsetWidth;
@@ -110,9 +117,10 @@
       let maxY = 0;
       const keys = this.series.map(s => s.key).concat(this.reference ? [this.reference.key] : []);
       for (const row of hist) for (const k of keys) { const v = row[k]; if (v !== null && v !== undefined && v > maxY) maxY = v; }
+      if (this.yMax) maxY = this.yMax;
       if (maxY <= 0) maxY = 1;
       const step = niceStep(maxY, 4);
-      const yMax = Math.ceil(maxY / step) * step;
+      const yMax = this.yMax ? this.yMax : Math.ceil(maxY / step) * step;
       const yOf = v => t + ph - (v / yMax) * ph;
       const xOf = i => l + (n <= 1 ? 0 : (i / (n - 1)) * pw);
 
@@ -136,9 +144,11 @@
           const xs = niceStep(last - first, 6);
           for (let tv = Math.ceil(first / xs) * xs; tv <= last; tv += xs) labels.push({ value: tv, label: String(tv) });
         }
+        // rows may be spaced more than one tick apart, so place labels by tick value
+        const xOfTick = v => l + ((v - first) / Math.max(1, last - first)) * pw;
         for (const { value, label } of labels) {
           if (value < first || value > last) continue;
-          ctx.fillText(label, xOf(value - first), t + ph + 6);
+          ctx.fillText(label, xOfTick(value), t + ph + 6);
         }
       }
 

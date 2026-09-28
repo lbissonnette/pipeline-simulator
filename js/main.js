@@ -1,7 +1,7 @@
 /* UI wiring, stage rendering (worker grid + flow particles), KPIs and charts. */
 (function () {
   'use strict';
-  const { Simulation, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
+  const { Simulation, COHORT_TICKS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
 
   const $ = sel => document.querySelector(sel);
   const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -556,7 +556,25 @@
       reference: { key: 'dispatcherCapacity', name: 'Capacity' },
     }, timeOpts)),
     util: new LineChart($('#chart-util'), Object.assign({ series: [{ key: 'utilPct', name: 'Busy share (%)', color: '--s1' }], fill: true }, timeOpts)),
+    completeness: new LineChart($('#chart-completeness'), Object.assign({}, timeOpts, {
+      series: [{ key: 'pct', name: 'Complete', color: '--s1' }], fill: true, yMax: 100,
+      format: v => (v === null || v === undefined) ? '–' : v.toFixed(1) + '%',
+      titleOf: row => `Arrived ${fmtDur(row.tick - 1)} · ${fmtDur(Math.max(0, sim.tick - row.tick + 1))} ago`,
+      extraRows: row => [['Arrived', fmt(row.arrived)], ['Processed', fmt(row.processed)]],
+    })),
   };
+  const COMPLETENESS_WINDOW_MIN = 6 * 60;
+
+  // Most recent arrival minute at which it and every older minute are >= 99% processed.
+  function completeThrough(rows) {
+    let through = null;
+    for (const r of rows) {
+      if (r.pct === null) continue;
+      if (r.pct >= 99) through = r;
+      else break;
+    }
+    return through;
+  }
 
   // Chart rows: 5-minute moving averages for the noisy per-tick series and a
   // 30-minute rolling window for latency percentiles (few bundles finish per tick).
@@ -630,7 +648,14 @@
     drawStage();
     const rows = chartRows(sim.history);
     updateKpis(rows);
-    for (const c of Object.values(charts)) { c.setData(rows); c.draw(); }
+    for (const [name, c] of Object.entries(charts)) { if (name !== 'completeness') { c.setData(rows); c.draw(); } }
+    const cohorts = sim.completeness(COMPLETENESS_WINDOW_MIN);
+    charts.completeness.setData(cohorts);
+    charts.completeness.draw();
+    const through = completeThrough(cohorts);
+    $('#completeness-note').textContent = through
+      ? `complete (≥99%) through ${fmtDur(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))} ago · last 6 h`
+      : 'nothing fully processed yet · last 6 h';
   }
 
   window.addEventListener('resize', () => { drawDistribution(); render(); });

@@ -10,7 +10,9 @@
  * completes that many conversions of its bundle. When it finishes, it becomes
  * idle and can take the next bundle on the following tick.
  *
- * The model is unitless in time: a tick is whatever the UI says it is.
+ * The model is unitless in time: a tick is whatever the UI says it is, except
+ * that arrival cohorts are grouped per COHORT_TICKS ticks (one minute at 10 s
+ * per tick) so completeness can be reported per arrival minute.
  *
  * Loaded as a plain <script> in the browser (global `PipelineSim`) and via
  * require() in Node for tests.
@@ -154,6 +156,10 @@
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
+  const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
+  const cohortOf = tick => Math.floor((tick - 1) / COHORT_TICKS);
+
   // ---------- simulation ----------
   class Simulation {
     constructor(config) {
@@ -168,8 +174,10 @@
       this.tick = 0;
       this.nextBundleId = 1;
       this.rrCursor = 0;
-      this.intake = { items: 0, oldestTick: null };
-      this.held = { items: 0, oldestTick: null };   // upstream-delay holding area
+      // Buffers are FIFO lists of cohorts: { cohort, count, firstTick }.
+      this.intake = { items: 0, oldestTick: null, cohorts: [] };
+      this.held = { items: 0, oldestTick: null, cohorts: [] };   // upstream-delay holding area
+      this.cohorts = new Map();   // cohort -> { arrived, processed }
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
       this.nextIncidentId = 1;
@@ -270,8 +278,11 @@
 
     releaseHeld() {
       if (this.held.items > 0) {
-        this.addToIntake(this.held.items, this.held.oldestTick);
-        this.held = { items: 0, oldestTick: null };
+        // held conversions are older than anything in the intake buffer
+        this.intake.cohorts = this.held.cohorts.concat(this.intake.cohorts);
+        this.intake.items += this.held.items;
+        this.intake.oldestTick = this.intake.oldestTick === null ? this.held.oldestTick : Math.min(this.intake.oldestTick, this.held.oldestTick);
+        this.held = { items: 0, oldestTick: null, cohorts: [] };
       }
     }
 
@@ -286,28 +297,77 @@
     }
 
     // ---------- intake / bundling ----------
-    addToIntake(n, tickOfOldest) {
+    // Record n conversions arriving this tick into a buffer (intake or held).
+    addArrivals(buffer, n) {
       if (n <= 0) return;
-      if (this.intake.items === 0 || this.intake.oldestTick === null) {
-        this.intake.oldestTick = tickOfOldest;
-      } else {
-        this.intake.oldestTick = Math.min(this.intake.oldestTick, tickOfOldest);
-      }
-      this.intake.items += n;
+      const t = this.tick, c = cohortOf(t);
+      const last = buffer.cohorts[buffer.cohorts.length - 1];
+      if (last && last.cohort === c) last.count += n;
+      else buffer.cohorts.push({ cohort: c, count: n, firstTick: t });
+      if (buffer.items === 0) buffer.oldestTick = t;
+      buffer.items += n;
+      let stat = this.cohorts.get(c);
+      if (!stat) { stat = { arrived: 0, processed: 0 }; this.cohorts.set(c, stat); this.pruneCohorts(c); }
+      stat.arrived += n;
     }
 
+    pruneCohorts(newest) {
+      if (this.cohorts.size <= COHORT_HISTORY + 60) return;
+      for (const k of this.cohorts.keys()) { if (k < newest - COHORT_HISTORY) this.cohorts.delete(k); }
+    }
+
+    // Take `size` conversions from the front of the intake buffer as a bundle.
     cutBundle(size) {
+      const cohorts = [];
+      let need = size;
+      const q = this.intake.cohorts;
+      while (need > 1e-9 && q.length) {
+        const head = q[0];
+        const take = Math.min(need, head.count);
+        cohorts.push({ cohort: head.cohort, count: take, firstTick: head.firstTick });
+        head.count -= take; need -= take;
+        if (head.count <= 1e-9) q.shift();
+      }
       const b = {
         id: this.nextBundleId++, size, remaining: size,
-        createdTick: this.intake.oldestTick, cutTick: this.tick, dispatchedTick: null,
+        cohorts, cursor: 0,                       // cursor: index of the cohort being processed
+        createdTick: cohorts.length ? cohorts[0].firstTick : this.tick,
+        cutTick: this.tick, dispatchedTick: null,
         worker: this.config.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
       };
       this.intake.items -= size;
-      if (this.intake.items <= 0) { this.intake.items = 0; this.intake.oldestTick = null; }
-      else this.intake.oldestTick = this.tick; // leftovers are treated as fresh
+      if (this.intake.items <= 1e-9 || !q.length) { this.intake.items = 0; this.intake.oldestTick = null; this.intake.cohorts = []; }
+      else this.intake.oldestTick = q[0].firstTick;
       this.totals.bundlesCut++;
       this.events.push({ type: 'bundle', size });
       return b;
+    }
+
+    // Attribute `amount` processed conversions to the bundle's cohorts, oldest first.
+    creditProcessed(b, amount) {
+      let left = amount;
+      while (left > 1e-9 && b.cursor < b.cohorts.length) {
+        const c = b.cohorts[b.cursor];
+        const take = Math.min(left, c.count);
+        c.count -= take; left -= take;
+        const stat = this.cohorts.get(c.cohort);
+        if (stat) stat.processed += take;
+        if (c.count <= 1e-9) b.cursor++;
+      }
+    }
+
+    // Completeness per arrival cohort for the last `count` cohorts:
+    // [{ cohort, tick, arrived, processed, pct }], oldest first.
+    completeness(count) {
+      const now = cohortOf(Math.max(1, this.tick));
+      const out = [];
+      for (let c = now - count + 1; c <= now; c++) {
+        if (c < 0) continue;
+        const s = this.cohorts.get(c);
+        const arrived = s ? s.arrived : 0, processed = s ? Math.min(s.processed, arrived) : 0;
+        out.push({ cohort: c, tick: c * COHORT_TICKS + 1, arrived, processed, pct: arrived > 0 ? (100 * processed) / arrived : null });
+      }
+      return out;
     }
 
     // ---------- dispatcher ----------
@@ -374,12 +434,7 @@
       }
       const arrivals = this.rng.poisson(lambda);
       this.totals.arrived += arrivals;
-      if (mods.holdArrivals) {
-        if (this.held.items === 0) this.held.oldestTick = t;
-        this.held.items += arrivals;
-      } else {
-        this.addToIntake(arrivals, t);
-      }
+      this.addArrivals(mods.holdArrivals ? this.held : this.intake, arrivals);
 
       // 2. Dispatch what was already queued, then bundle while the dispatcher
       //    has room, handing bundles straight through to idle workers.
@@ -413,6 +468,7 @@
         busy++;
         const take = Math.min(rate, b.remaining);
         b.remaining -= take;
+        this.creditProcessed(b, take);
         w.lastWorked = take;
         w.processed += take;
         processed += take;
@@ -487,7 +543,7 @@
   }
 
   return {
-    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, makeRng, sampleRate,
+    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, COHORT_TICKS, makeRng, sampleRate,
     expectedRate, expectedBundleTicks: expectedBundleTicksCached,
   };
 });
