@@ -39,7 +39,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   below 99% complete (P90 and P50 likewise), counted from the start of the
   window's oldest minute. Recomputed every simulated minute; 0 means every
   window has passed that threshold. Under the Healthy preset it settles near
-  P50 25m, P90 31m, P99 47m.
+  P50 1h, P90 1h48m, P99 2h.
 - **End-to-end processing time distribution** – a histogram of bundle
   end-to-end time for the last 12 hours and the last 7 days on the same axes.
   Each window is weighted by conversions and normalised to its own total, so
