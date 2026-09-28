@@ -51,6 +51,11 @@
       this.format = opts.format || fmt;        // value formatter for tooltip
       this.yMax = opts.yMax || null;           // fixed y axis top (else auto)
       this.yFormat = opts.yFormat || fmt;      // axis label formatter
+      // xByTick: place rows by their `tick` value within an explicit domain
+      // (set via setDomain) instead of evenly by index. Lets sparse rows (one
+      // per minute) scroll as smoothly as per-tick rows.
+      this.xByTick = !!opts.xByTick;
+      this.domain = null;
       this.extraRows = opts.extraRows || null; // row => [[label, value], ...] appended to the tooltip
       this.hoverIndex = null;
       this.history = [];
@@ -75,6 +80,12 @@
     }
 
     setData(history) { this.history = history; }
+    setDomain(x0, x1) { this.domain = [x0, x1]; }
+    xRange() {
+      const h = this.history;
+      if (this.xByTick && this.domain) return this.domain;
+      return h.length ? [h[0].tick, h[h.length - 1].tick] : [0, 1];
+    }
 
     onMove(e) {
       const rect = this.canvas.getBoundingClientRect();
@@ -83,7 +94,16 @@
       if (!n) return;
       const { l, r } = this.padding;
       const pw = this.w - l - r;
-      const idx = Math.round(((x - l) / pw) * (n - 1));
+      let idx;
+      if (this.xByTick) {
+        const [x0, x1] = this.xRange();
+        const tickAt = x0 + ((x - l) / pw) * (x1 - x0);
+        idx = 0;
+        let best = Infinity;
+        for (let i = 0; i < n; i++) { const d = Math.abs(this.history[i].tick - tickAt); if (d < best) { best = d; idx = i; } }
+      } else {
+        idx = Math.round(((x - l) / pw) * (n - 1));
+      }
       this.hoverIndex = Math.max(0, Math.min(n - 1, idx));
       this.draw();
       const row = this.history[this.hoverIndex];
@@ -132,7 +152,10 @@
       const step = niceStep(maxY, 4);
       const yMax = this.yMax ? this.yMax : Math.ceil(maxY / step) * step;
       const yOf = v => t + ph - (v / yMax) * ph;
-      const xOf = i => l + (n <= 1 ? 0 : (i / (n - 1)) * pw);
+      const [dx0, dx1] = this.xRange();
+      const xOf = this.xByTick
+        ? i => l + ((hist[i].tick - dx0) / Math.max(1, dx1 - dx0)) * pw
+        : i => l + (n <= 1 ? 0 : (i / (n - 1)) * pw);
 
       // grid + y labels
       ctx.font = font; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
@@ -146,7 +169,7 @@
       // x labels
       if (n > 1) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = muted;
-        const first = hist[0].tick, last = hist[n - 1].tick;
+        const first = dx0, last = dx1;
         let labels;
         if (this.xTicks) labels = this.xTicks(first, last);
         else {
@@ -163,6 +186,8 @@
       }
 
       if (n < 2) { ctx.restore(); return; }
+      // keep series inside the plot (a tick-placed row can start just left of the domain)
+      ctx.save(); ctx.beginPath(); ctx.rect(l - 1, t - 3, pw + 2, ph + 4); ctx.clip();
 
       // When there are many more points than pixels, draw each pixel column's
       // min and max instead of every point: same shape, far fewer segments.
@@ -206,6 +231,7 @@
         ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
         ctx.beginPath(); tracePath(s.key, false); ctx.stroke();
       }
+      ctx.restore();
 
       // crosshair + markers
       if (this.hoverIndex !== null && this.hoverIndex < n) {

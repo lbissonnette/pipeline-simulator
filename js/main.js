@@ -607,7 +607,7 @@
     }, timeOpts)),
     util: new LineChart($('#chart-util'), Object.assign({ series: [{ key: 'utilPct', name: 'Busy share (%)', color: '--s1' }], fill: true }, timeOpts)),
     completeness: new LineChart($('#chart-completeness'), Object.assign({}, timeOpts, {
-      series: [{ key: 'pct', name: 'Complete', color: '--s1' }], fill: true, yMax: 100,
+      series: [{ key: 'pct', name: 'Complete', color: '--s1' }], fill: true, yMax: 100, xByTick: true,
       format: v => (v === null || v === undefined) ? '–' : v.toFixed(1) + '%',
       titleOf: row => `Arrived ${fmtDur(row.tick - 1)} · ${fmtDur(Math.max(0, sim.tick - row.tick + 1))} ago`,
       extraRows: row => [['Arrived', fmt(row.arrived)], ['Processed', fmt(row.processed)]],
@@ -840,7 +840,7 @@
     let i = 0;
     for (const [name, c] of Object.entries(charts)) {
       const mine = drawAll || (i++ % chartStride) === slot;
-      if (name === 'completeness') { c.setData(cohorts); if (mine) c.draw(); }
+      if (name === 'completeness') { c.setData(cohorts); c.setDomain(firstTick, sim.tick); if (mine) c.draw(); }
       else { c.setData(rows); if (mine) c.draw(); }
     }
     if (drawAll || (i % chartStride) === slot) renderHistogram();
