@@ -127,11 +127,11 @@
   $$('[data-incident]').forEach(btn => btn.addEventListener('click', () => {
     const type = btn.dataset.incident;
     const num = id => parseFloat($(id).value);
-    const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
-    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
-    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, mins('#degrade-dur'));
-    else if (type === 'poison') sim.addIncident('poison', { share: num('#poison-share') / 100, cost: Math.round(num('#poison-cost') * TICKS_PER_MIN) }, mins('#poison-dur'));
-    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
+    const hours = id => Math.max(1, Math.round(num(id) * TICKS_PER_HOUR));
+    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), hours('#spike-dur'));
+    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, hours('#degrade-dur'));
+    else if (type === 'poison') sim.addIncident('poison', { share: num('#poison-share') / 100, cost: Math.round(num('#poison-cost') * TICKS_PER_MIN) }, hours('#poison-dur'));
+    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, hours('#delay-dur'));
     renderIncidents();
     if (!playing) render(true);
   }));

@@ -116,7 +116,7 @@
       <div class="incident">
         <div class="inc-name">Traffic spike</div>
         <label>× <input type="number" id="spike-mag" min="1" max="20" step="0.5" value="3"></label>
-        <label>for <input type="number" id="spike-dur" min="1" max="4320" step="1" value="30"> min</label>
+        <label>for <input type="number" id="spike-dur" min="0.25" max="72" step="0.25" value="0.5"> hours</label>
         <button class="btn small" data-incident="spike">Fire</button>
       </div>
       <div class="incident">
@@ -125,19 +125,19 @@
         <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
           <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
         <p class="warn" id="degrade-warning" hidden>Heads-up: routing is also lowest-index (first fit), so this degrades exactly the workers that receive most of the work. The impact will be far larger than the same share chosen at random. Fine if that is the point.</p>
-        <label>for <input type="number" id="degrade-dur" min="1" max="4320" step="1" value="60"> min</label>
+        <label>for <input type="number" id="degrade-dur" min="0.25" max="72" step="0.25" value="1"> hours</label>
         <button class="btn small" data-incident="degrade">Fire</button>
       </div>
       <div class="incident">
         <div class="inc-name">Conversion of Death</div>
         <label>an extra <input type="number" id="poison-share" min="0.001" max="10" step="0.001" value="0.05">% of conversions</label>
         <label>each costing <input type="number" id="poison-cost" min="1" max="240" step="1" value="30"> min</label>
-        <label>for <input type="number" id="poison-dur" min="1" max="4320" step="1" value="30"> min</label>
+        <label>for <input type="number" id="poison-dur" min="0.25" max="72" step="0.25" value="0.5"> hours</label>
         <button class="btn small" data-incident="poison">Fire</button>
       </div>
       <div class="incident">
         <div class="inc-name">Upstream delay</div>
-        <label class="wide">hold arrivals for <input type="number" id="delay-dur" min="1" max="4320" step="1" value="45"> min, then release</label>
+        <label class="wide">hold arrivals for <input type="number" id="delay-dur" min="0.25" max="72" step="0.25" value="0.75"> hours, then release</label>
         <button class="btn small" data-incident="upstreamDelay">Fire</button>
       </div>
       <ul id="active-incidents" class="active-incidents" aria-live="polite"></ul>
