@@ -272,3 +272,27 @@ test('degrade incident: a share of workers run slower, and factor 0 means offlin
   assert.equal(sim.last.offline, 0);
   invariants(sim);
 });
+
+test('lowest-idle routing concentrates work on low-index workers', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 51, routing: 'lowestIdle' });
+  run(sim, 3000);
+  const busy = sim.workers.filter(w => w.bundle).map(w => w.id);
+  const idle = sim.workers.filter(w => !w.bundle).map(w => w.id);
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  assert.ok(busy.length > 700 && idle.length > 100);
+  assert.ok(mean(busy) < mean(idle) - 300, `busy ${mean(busy)} idle ${mean(idle)}`);
+  assert.ok(sim.workers[0].completed > sim.workers[999].completed);
+  invariants(sim);
+});
+
+test('degrade can target the lowest x% of workers by index', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 52 });
+  run(sim, 100);
+  const inc = sim.addIncident('degrade', { factor: 0, fraction: 0.2, selection: 'lowest' }, 60);
+  assert.deepEqual(inc.workers, Array.from({ length: 200 }, (_, i) => i));
+  sim.step();
+  for (let i = 0; i < 200; i++) assert.ok(sim.workers[i].offlineUntil >= sim.tick);
+  assert.ok(sim.workers[200].offlineUntil < sim.tick);
+  const rnd = sim.addIncident('degrade', { factor: 0.5, fraction: 0.2, selection: 'random' }, 60);
+  assert.notDeepEqual(rnd.workers.slice().sort((a, b) => a - b), inc.workers);
+});

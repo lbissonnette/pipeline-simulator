@@ -61,6 +61,7 @@
         <span class="lbl">Routing</span>
         <select data-param="routing">
           <option value="idle">Any idle worker</option>
+          <option value="lowestIdle">Lowest idle index (first fit)</option>
           <option value="roundRobin">Round robin over idle workers</option>
           <option value="sticky">Sticky partition (bundle waits for its worker)</option>
         </select>
@@ -122,7 +123,8 @@
       <div class="incident">
         <div class="inc-name">Degraded workers</div>
         <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
-        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers</label>
+        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
+          <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
         <label>for <input type="number" id="degrade-dur" min="1" max="4320" step="1" value="60"> min</label>
         <button class="btn small" data-incident="degrade">Fire</button>
       </div>
@@ -282,12 +284,12 @@
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
-        <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment.</li>
+        <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment. <i>Lowest idle index</i> is first-fit: work concentrates on the lowest-numbered workers and the highest-numbered ones stay idle while there is spare capacity.</li>
         <li><b>Processing</b>: each worker holds one bundle. Every tick it draws a rate in conversions per tick from the distribution, multiplies by its permanent speed factor and any slowdown, and completes that many conversions. With the defaults (10 per tick, 7,200 per bundle) a bundle takes about 2 hours. When it is done the worker takes the next bundle on the following tick.</li>
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, estimated by simulation. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
         <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
-        <li><b>Degraded workers</b> picks a random share of the pool and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
+        <li><b>Degraded workers</b> picks a share of the pool, either at random or the lowest-numbered workers, and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>
       </ul>
     </details>

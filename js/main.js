@@ -141,7 +141,7 @@
     const num = id => parseFloat($(id).value);
     const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
     if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
-    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100 }, mins('#degrade-dur'));
+    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100, selection: $('#degrade-sel').value }, mins('#degrade-dur'));
     else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
     renderIncidents();
     if (!playing) render(true);
@@ -149,9 +149,9 @@
 
   const INCIDENT_LABEL = {
     spike: i => `Traffic spike ×${i.magnitude}`,
-    degrade: i => i.factor === 0
+    degrade: i => (i.factor === 0
       ? `Outage: ${fmtInt(i.workers.length)} workers offline`
-      : `Degraded: ${fmtInt(i.workers.length)} workers at ×${i.factor}`,
+      : `Degraded: ${fmtInt(i.workers.length)} workers at ×${i.factor}`) + (i.selection === 'lowest' ? ' (lowest index)' : ''),
     upstreamDelay: () => 'Upstream delay (holding arrivals)',
   };
 

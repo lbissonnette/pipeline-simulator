@@ -141,7 +141,7 @@
     bundleSize: 7200,          // conversions per bundle
     bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
     dispatcherCapacity: 10,    // bundles the dispatcher can hold
-    routing: 'idle',           // idle | roundRobin | sticky
+    routing: 'idle',           // idle | lowestIdle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     heterogeneity: 0,          // sd of per-worker permanent speed multiplier
     historyLength: 4320,       // 12 h
@@ -150,6 +150,7 @@
 
   const ROUTING = {
     idle: 'Any idle worker',
+    lowestIdle: 'Lowest idle index (first fit)',
     roundRobin: 'Round robin over idle workers',
     sticky: 'Sticky partition (bundle waits for its worker)',
   };
@@ -240,9 +241,11 @@
 
     // ---------- incidents ----------
     // type: 'spike'         magnitude = arrival multiplier
-    //       'degrade'       magnitude = { factor, fraction }: a random `fraction`
-    //                       of workers run at `factor` x their rate; factor 0 is
-    //                       a full outage (offline, skipped by idle routing)
+    //       'degrade'       magnitude = { factor, fraction, selection }: a
+    //                       `fraction` of workers run at `factor` x their rate;
+    //                       factor 0 is a full outage (offline, skipped by idle
+    //                       routing). selection 'random' (default) picks them at
+    //                       random, 'lowest' takes the lowest indices.
     //       'upstreamDelay' arrivals are held until the incident ends
     //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
@@ -256,9 +259,12 @@
         const factor = Math.max(0, magnitude.factor);
         const count = Math.round(this.workers.length * Math.min(1, Math.max(0, magnitude.fraction)));
         const ids = this.workers.map(w => w.id);
-        for (let i = ids.length - 1; i > 0; i--) {
-          const j = this.rng.int(i + 1);
-          [ids[i], ids[j]] = [ids[j], ids[i]];
+        inc.selection = magnitude.selection === 'lowest' ? 'lowest' : 'random';
+        if (inc.selection === 'random') {
+          for (let i = ids.length - 1; i > 0; i--) {
+            const j = this.rng.int(i + 1);
+            [ids[i], ids[j]] = [ids[j], ids[i]];
+          }
         }
         inc.workers = ids.slice(0, count);
         inc.factor = factor;
@@ -453,6 +459,12 @@
           const b = q[i], w = ws[b.worker];
           if (w && w.bundle === null) { this.assign(w, b); q.splice(i, 1); n++; }
           else i++;
+        }
+        return n;
+      }
+      if (this.config.routing === 'lowestIdle') {
+        for (let i = 0; i < ws.length && q.length; i++) {
+          if (this.isIdle(ws[i])) { this.assign(ws[i], q.shift()); n++; }
         }
         return n;
       }
