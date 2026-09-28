@@ -5,9 +5,18 @@
 (function (root) {
   'use strict';
 
-  function cssVar(name, el) {
-    return getComputedStyle(el || document.documentElement).getPropertyValue(name).trim();
+  // Theme colours are read through getComputedStyle, which is slow enough to
+  // matter at 60 fps across many charts; cache them briefly.
+  const cssCache = new Map();
+  let cssCacheAt = 0;
+  function cssVar(name) {
+    const now = performance.now();
+    if (now - cssCacheAt > 1000) { cssCache.clear(); cssCacheAt = now; }
+    let v = cssCache.get(name);
+    if (v === undefined) { v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); cssCache.set(name, v); }
+    return v;
   }
+  function invalidateCssCache() { cssCache.clear(); cssCacheAt = 0; }
 
   function niceStep(range, maxTicks) {
     const rough = range / Math.max(1, maxTicks);
@@ -155,41 +164,47 @@
 
       if (n < 2) { ctx.restore(); return; }
 
+      // When there are many more points than pixels, draw each pixel column's
+      // min and max instead of every point: same shape, far fewer segments.
+      const bucket = Math.max(1, Math.floor(n / Math.max(1, pw)));
+      const tracePath = (key, closeForFill) => {
+        let started = false, lastX = 0;
+        if (closeForFill) { ctx.moveTo(xOf(0), yOf(0)); started = true; }
+        for (let i = 0; i < n; i += bucket) {
+          const end = Math.min(n, i + bucket);
+          let lo = Infinity, hi = -Infinity, loI = -1, hiI = -1;
+          for (let j = i; j < end; j++) {
+            const v = hist[j][key];
+            if (v === null || v === undefined) continue;
+            if (v < lo) { lo = v; loI = j; }
+            if (v > hi) { hi = v; hiI = j; }
+          }
+          if (loI < 0) { if (!closeForFill) started = false; continue; }
+          const x = xOf(i);
+          // visit the extremes in index order so the run reads left to right
+          const first = loI <= hiI ? lo : hi, second = loI <= hiI ? hi : lo;
+          if (!started) { ctx.moveTo(x, yOf(first)); started = true; } else ctx.lineTo(x, yOf(first));
+          if (bucket > 1 && first !== second) ctx.lineTo(x, yOf(second));
+          lastX = x;
+        }
+        if (closeForFill) { ctx.lineTo(lastX, yOf(0)); ctx.closePath(); }
+      };
+
       // reference line
       if (this.reference) {
         ctx.strokeStyle = axis; ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        let started = false;
-        for (let i = 0; i < n; i++) {
-          const v = hist[i][this.reference.key];
-          if (v === null || v === undefined) continue;
-          const x = xOf(i), y = yOf(v);
-          if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
+        ctx.beginPath(); tracePath(this.reference.key, false); ctx.stroke();
       }
 
       // series
       for (const s of this.series) {
         const col = this.color(s);
         if (this.fill) {
-          ctx.beginPath();
-          ctx.moveTo(xOf(0), yOf(0));
-          for (let i = 0; i < n; i++) ctx.lineTo(xOf(i), yOf(hist[i][s.key] || 0));
-          ctx.lineTo(xOf(n - 1), yOf(0));
-          ctx.closePath();
+          ctx.beginPath(); tracePath(s.key, true);
           ctx.globalAlpha = 0.12; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
         }
         ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        ctx.beginPath();
-        let started = false;
-        for (let i = 0; i < n; i++) {
-          const v = hist[i][s.key];
-          if (v === null || v === undefined) { started = false; continue; }
-          const x = xOf(i), y = yOf(v);
-          if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
+        ctx.beginPath(); tracePath(s.key, false); ctx.stroke();
       }
 
       // crosshair + markers
@@ -347,4 +362,5 @@
   root.LineChart = LineChart;
   root.Histogram = Histogram;
   root.fmtNumber = fmt;
+  root.invalidateChartTheme = invalidateCssCache;
 })(window);

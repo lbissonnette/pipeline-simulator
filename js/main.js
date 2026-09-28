@@ -356,7 +356,9 @@
       x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0),
       y: node.y + (dir === 'down' ? R : dir === 'up' ? -R : 0),
     });
+    const scale = Math.min(1, 60 / Math.max(1, ticksPerSecond)); // 1 at <= 10 min/s, 1/12 at 2 h/s
     const sample = (list, max) => {
+      max = Math.max(1, Math.round(max * scale));
       const keep = Math.min(list.length, max), out = [];
       for (let i = 0; i < keep; i++) out.push(list[Math.floor((i / keep) * list.length)]);
       return out;
@@ -633,38 +635,72 @@
     countLabel: 'conversions',
   });
 
-  function weightedPct(samples, p) {
-    if (!samples.length) return null;
-    const sorted = samples.slice().sort((a, b) => a.latency - b.latency);
-    const total = sorted.reduce((s, c) => s + c.size, 0);
-    let acc = 0;
-    for (const c of sorted) { acc += c.size; if (acc >= p * total) return c.latency; }
-    return sorted[sorted.length - 1].latency;
+  // Each window keeps conversion-weighted counts per minute of latency,
+  // updated incrementally: new completions are added as they appear and old
+  // ones subtracted as they leave the window, so a refresh costs O(changes).
+  const FINE_MINUTES = 48 * 60; // latencies beyond 48 h land in the last slot
+  class LatencyWindow {
+    constructor(ticks) { this.ticks = ticks; this.reset(); }
+    reset() {
+      this.fine = new Float64Array(FINE_MINUTES + 1);
+      this.total = 0; this.maxMinute = 0;
+      this.tail = 0;  // index in sim.completions of the next completion to add
+      this.head = 0;  // index of the oldest completion still inside the window
+      this.epoch = null;
+    }
+    slot(c) { return Math.min(FINE_MINUTES, Math.floor(c.latency / TICKS_PER_MIN)); }
+    update() {
+      const list = sim.completions;
+      // the model compacts its array occasionally and reset() empties it: rebuild then
+      if (this.epoch !== list || this.tail > list.length || this.head > list.length) { this.reset(); this.epoch = list; }
+      for (; this.tail < list.length; this.tail++) {
+        const c = list[this.tail], s = this.slot(c);
+        this.fine[s] += c.size; this.total += c.size;
+        if (s > this.maxMinute) this.maxMinute = s;
+      }
+      const cutoff = sim.tick - this.ticks;
+      for (; this.head < this.tail && list[this.head].tick <= cutoff; this.head++) {
+        const c = list[this.head];
+        this.fine[this.slot(c)] -= c.size; this.total -= c.size;
+      }
+      if (this.head >= this.tail) { this.total = 0; this.maxMinute = 0; }
+    }
+    percentile(p) {
+      if (this.total <= 0) return null;
+      let acc = 0;
+      for (let m = 0; m <= FINE_MINUTES; m++) { acc += this.fine[m]; if (acc >= p * this.total) return (m + 0.5) * TICKS_PER_MIN; }
+      return FINE_MINUTES * TICKS_PER_MIN;
+    }
+    binned(binMin, nBins) {
+      const counts = new Array(nBins).fill(0);
+      for (let m = 0; m <= FINE_MINUTES; m++) {
+        const v = this.fine[m];
+        if (v > 0) counts[Math.min(nBins - 1, Math.floor(m / binMin))] += v;
+      }
+      return counts;
+    }
   }
+  const histWindows = HIST_WINDOWS.map(w => Object.assign({}, w, { win: new LatencyWindow(w.ticks) }));
 
   function renderHistogram() {
-    const sets = HIST_WINDOWS.map(w => Object.assign({}, w, { samples: sim.latencySamples(w.ticks) }));
-    let maxLat = 0;
-    for (const s of sets) for (const c of s.samples) if (c.latency > maxLat) maxLat = c.latency;
-    const maxMin = Math.max(30, maxLat / TICKS_PER_MIN);
+    let maxMinute = 0;
+    for (const w of histWindows) { w.win.update(); if (w.win.total > 0 && w.win.maxMinute > maxMinute) maxMinute = w.win.maxMinute; }
+    const maxMin = Math.max(30, maxMinute + 1);
     let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
     for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
     const nBins = Math.ceil(maxMin / binMin) + 1;
     const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin }));
-    const series = sets.map(s => {
-      const counts = new Array(nBins).fill(0);
-      let total = 0;
-      for (const c of s.samples) {
-        const i = Math.min(nBins - 1, Math.floor(c.latency / TICKS_PER_MIN / binMin));
-        counts[i] += c.size; total += c.size;
-      }
-      return { name: s.name, color: s.color, counts, values: counts.map(v => total ? (100 * v) / total : 0) };
+    const series = histWindows.map(w => {
+      const counts = w.win.binned(binMin, nBins), total = w.win.total;
+      return { name: w.name, color: w.color, counts, values: counts.map(v => total > 0 ? Math.max(0, (100 * v) / total) : 0) };
     });
     histChart.setData({ bins, series });
     histChart.draw();
-    for (const s of sets) {
-      $(`#hist-${s.key}-p50`).textContent = fmtDurFixed(weightedPct(s.samples, 0.5));
-      $(`#hist-${s.key}-p95`).textContent = fmtDurFixed(weightedPct(s.samples, 0.95));
+  }
+  function renderHistogramText() {
+    for (const w of histWindows) {
+      $(`#hist-${w.key}-p50`).textContent = fmtDurFixed(w.win.percentile(0.5));
+      $(`#hist-${w.key}-p95`).textContent = fmtDurFixed(w.win.percentile(0.95));
     }
   }
 
@@ -763,27 +799,54 @@
   }
 
   // ---------- render ----------
-  // The stage animates every frame; charts and KPIs refresh a few times a
-  // second (or immediately when paused, stepping, or resizing).
-  const DASHBOARD_INTERVAL_MS = 250;
-  let lastDashboard = 0;
-  function render(force) {
-    drawStage();
-    const now = performance.now();
-    if (!force && playing && now - lastDashboard < DASHBOARD_INTERVAL_MS) return;
-    lastDashboard = now;
-    renderDashboard();
+  // The stage and every chart redraw on each animation frame; the numeric
+  // readouts (tiles and header figures) refresh a few times a second so the
+  // digits do not flicker, and immediately when paused, stepping or resizing.
+  const TEXT_INTERVAL_MS = 250;
+  let lastText = 0;
+
+  // Adaptive chart cadence. The stage draws every frame. The charts are
+  // spread round-robin over `chartStride` frames (2 = each chart at 30 Hz on a
+  // 60 Hz display). If frames run long the stride widens, up to 6; when there
+  // is headroom it narrows again. Series move a fraction of a pixel per frame,
+  // so 20-30 Hz chart updates look continuous while the flow stays smooth.
+  const STRIDES = [2, 3, 4, 6, 8, 12];
+  let strideIdx = 0, chartStride = STRIDES[0];
+  let frameNo = 0, frameAvg = 16, lastRenderAt = 0, lastStrideChange = 0;
+  function tuneStride(now) {
+    if (lastRenderAt) {
+      const dt = Math.min(100, now - lastRenderAt);
+      frameAvg += (dt - frameAvg) * 0.1;
+    }
+    lastRenderAt = now;
+    if (now - lastStrideChange < 1500) return;
+    if (frameAvg > 19 && strideIdx < STRIDES.length - 1) { strideIdx++; lastStrideChange = now; }
+    else if (frameAvg < 13.5 && strideIdx > 0) { strideIdx--; lastStrideChange = now; }
+    chartStride = STRIDES[strideIdx];
   }
-  function renderDashboard() {
+
+  function render(force) {
+    const now = performance.now();
+    if (playing && !force) tuneStride(now);
+    drawStage();
     const rows = chartRows(sim.history);
-    updateKpis(rows);
-    for (const [name, c] of Object.entries(charts)) { if (name !== 'completeness') { c.setData(rows); c.draw(); } }
-    // same horizon as the other charts: from the first tick still in history to now
+    // completeness: same horizon as the other charts
     const firstTick = sim.history.length ? sim.history[0].tick : sim.tick;
     const minutes = Math.floor((sim.tick - 1) / COHORT_TICKS) - Math.floor((firstTick - 1) / COHORT_TICKS) + 1;
     const cohorts = sim.completeness(Math.max(1, minutes));
-    charts.completeness.setData(cohorts);
-    charts.completeness.draw();
+    frameNo++;
+    const drawAll = force || !playing;
+    const slot = frameNo % chartStride;
+    let i = 0;
+    for (const [name, c] of Object.entries(charts)) {
+      const mine = drawAll || (i++ % chartStride) === slot;
+      if (name === 'completeness') { c.setData(cohorts); if (mine) c.draw(); }
+      else { c.setData(rows); if (mine) c.draw(); }
+    }
+    if (drawAll || (i % chartStride) === slot) renderHistogram();
+    if (!force && playing && now - lastText < TEXT_INTERVAL_MS) return;
+    lastText = now;
+    updateKpis(rows);
     const through = completeThrough(cohorts);
     $('#complete-through').textContent = through
       ? fmtDurFixed(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))
@@ -792,12 +855,12 @@
     $('#fresh-p50').textContent = fmtDurFixed(f.fresh50);
     $('#fresh-p90').textContent = fmtDurFixed(f.fresh90);
     $('#fresh-p99').textContent = fmtDurFixed(f.fresh99);
-    renderHistogram();
+    renderHistogramText();
   }
 
   window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });
   if (window.matchMedia) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { buildRamp(); drawDistribution(); render(true); });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { window.invalidateChartTheme(); buildRamp(); drawDistribution(); render(true); });
   }
 
   // ---------- boot ----------
