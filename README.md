@@ -52,6 +52,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   p95.
 - **Age percentiles of processed data** – P50/P90/P99 of the end-to-end age
   of bundles at write-out, over a rolling one-hour window of completions.
+- **Where in-flight data is** – a stacked area of conversions not yet written
+  out, by stage: on workers, queued at the dispatcher, buffered at the bundler,
+  held upstream.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, dispatcher queue depth, and busy share. Hover for exact values.
 - **PDF / CDF** – both distribution charts toggle between the share per bin
@@ -66,7 +69,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 |---|---|---|
 | Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 5,200 = 520/s, which keeps about 60% of the pool busy. |
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
-| Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
+| Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 1,024). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |

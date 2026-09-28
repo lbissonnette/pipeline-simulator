@@ -56,6 +56,9 @@
       // per minute) scroll as smoothly as per-tick rows.
       this.xByTick = !!opts.xByTick;
       this.domain = null;
+      // stacked: series[i].key holds the cumulative value (series 0..i summed) and
+      // series[i].rawKey the layer's own value; bands are filled between layers
+      this.stacked = !!opts.stacked;
       this.extraRows = opts.extraRows || null; // row => [[label, value], ...] appended to the tooltip
       this.hoverIndex = null;
       this.history = [];
@@ -108,8 +111,13 @@
       this.draw();
       const row = this.history[this.hoverIndex];
       let html = `<div class="tt-title">${this.titleOf(row)}</div>`;
-      for (const s of this.series) {
-        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(row[s.key])}</b></div>`;
+      const ttSeries = this.stacked ? this.series.slice().reverse() : this.series; // top layer first
+      for (const s of ttSeries) {
+        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(row[s.rawKey || s.key])}</b></div>`;
+      }
+      if (this.stacked) {
+        const top = this.series[this.series.length - 1];
+        html += `<div class="tt-row"><span class="tt-swatch" style="visibility:hidden"></span><span>total</span><b>${this.format(row[top.key])}</b></div>`;
       }
       if (this.reference) {
         html += `<div class="tt-row"><span class="tt-swatch tt-ref"></span><span>${this.reference.name}</span><b>${this.format(row[this.reference.key])}</b></div>`;
@@ -222,14 +230,35 @@
       }
 
       // series
-      for (const s of this.series) {
-        const col = this.color(s);
-        if (this.fill) {
-          ctx.beginPath(); tracePath(s.key, true);
-          ctx.globalAlpha = 0.12; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
+      if (this.stacked) {
+        // a band per layer: forward along this layer's cumulative top, back along the previous one
+        const traceBack = key => {
+          for (let i = n - 1; i >= 0; i -= bucket) {
+            const start = Math.max(0, i - bucket + 1);
+            let lo = Infinity, hi = -Infinity;
+            for (let j = start; j <= i; j++) { const v = key ? hist[j][key] : 0; if (v === null || v === undefined) continue; if (v < lo) lo = v; if (v > hi) hi = v; }
+            if (lo === Infinity) continue;
+            const x = xOf(start);
+            ctx.lineTo(x, yOf(hi)); if (bucket > 1 && hi !== lo) ctx.lineTo(x, yOf(lo));
+          }
+        };
+        this.series.forEach((s, si) => {
+          const col = this.color(s);
+          ctx.beginPath(); tracePath(s.key, false); traceBack(si > 0 ? this.series[si - 1].key : null); ctx.closePath();
+          ctx.globalAlpha = 0.55; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
+          ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+          ctx.beginPath(); tracePath(s.key, false); ctx.stroke();
+        });
+      } else {
+        for (const s of this.series) {
+          const col = this.color(s);
+          if (this.fill) {
+            ctx.beginPath(); tracePath(s.key, true);
+            ctx.globalAlpha = 0.12; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1;
+          }
+          ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+          ctx.beginPath(); tracePath(s.key, false); ctx.stroke();
         }
-        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        ctx.beginPath(); tracePath(s.key, false); ctx.stroke();
       }
       ctx.restore();
 

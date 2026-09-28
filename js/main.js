@@ -71,7 +71,7 @@
         return (v * 100).toFixed(3) + '%';
       case 'expensiveCost': case 'expensiveCostSd':
         return fmtMinutes(v);
-      case 'arrivalRate': case 'bundleSize': case 'workers':
+      case 'arrivalRate': case 'bundleSize': case 'workers': case 'dispatcherCapacity':
         return fmtInt(v);
       case 'dist.mean': case 'dist.sd':
         return Number.isInteger(v) ? String(v) : v.toFixed(v < 5 ? 2 : 1).replace(/\.?0+$/, '');
@@ -607,6 +607,15 @@
       yFormat: fmtHours,
       format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_HOUR),
     })),
+    where: new LineChart($('#chart-where'), Object.assign({}, timeOpts, {
+      stacked: true,
+      series: [
+        { key: 'stackWorkers', rawKey: 'workerItems', name: 'workers', color: '--s1' },
+        { key: 'stackDispatcher', rawKey: 'dispatcherItems', name: 'dispatcher', color: '--s2' },
+        { key: 'stackBundler', rawKey: 'intakeItems', name: 'bundler', color: '--s3' },
+        { key: 'stackUpstream', rawKey: 'heldItems', name: 'upstream', color: '--s4' },
+      ],
+    })),
     inflight: new LineChart($('#chart-inflight'), Object.assign({}, timeOpts, {
       series: [{ key: 'inflight50Hr', name: 'P50', color: '--s1' }, { key: 'inflight90Hr', name: 'P90', color: '--s2' }, { key: 'inflight99Hr', name: 'P99', color: '--s3' }],
       yFormat: fmtHours,
@@ -821,8 +830,11 @@
         const at = p => all[Math.min(all.length - 1, Math.floor(all.length * p))] / TICKS_PER_HOUR;
         st.p50 = at(0.5); st.p90 = at(0.9); st.p99 = at(0.99);
       } else if (st.latCount < 5) { st.p50 = null; st.p90 = null; st.p99 = null; }
+      const wk = h.workerItems || 0, dq = h.dispatcherItems || 0, bu = h.intakeItems || 0, up = h.heldItems || 0;
       st.rows.push({
         tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
+        workerItems: wk, dispatcherItems: dq, intakeItems: bu, heldItems: up,
+        stackWorkers: wk, stackDispatcher: wk + dq, stackBundler: wk + dq + bu, stackUpstream: wk + dq + bu + up,
         dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
         arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
         latP50Hr: st.p50, latP90Hr: st.p90, latP99Hr: st.p99,
@@ -866,7 +878,7 @@
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
     $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.stalled ? `${fmtInt(snap.stalled)} stalled` : null, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
     const dq = $('#kpi-dispatcher');
-    dq.textContent = `${snap.dispatcherQueued} / ${snap.dispatcherCapacity}`;
+    dq.textContent = `${fmtInt(snap.dispatcherQueued)} / ${fmtInt(snap.dispatcherCapacity)}`;
     dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);
     $('#kpi-upstream').textContent = snap.heldItems > 0
       ? `${fmt(snap.intakeItems)} at bundler · ${fmt(snap.heldItems)} held`

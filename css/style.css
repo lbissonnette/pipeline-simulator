@@ -12,6 +12,7 @@
   --s1: #2a78d6;
   --s2: #eb6834;
   --s3: #1baf7a;
+  --s4: #eda100;
   --accent: #2a78d6;
   --accent-ink: #ffffff;
   --cell-idle: #e9e8e2;
@@ -39,6 +40,7 @@
     --s1: #3987e5;
     --s2: #d95926;
     --s3: #199e70;
+    --s4: #c98500;
     --accent: #3987e5;
     --cell-idle: #2a2a28;
     --cell-offline: #383835;
@@ -185,6 +187,7 @@ body.reordering { cursor: grabbing; user-select: none; }
 .sw.s1 { background: var(--s1); }
 .sw.s2 { background: var(--s2); }
 .sw.s3 { background: var(--s3); }
+.sw.s4 { background: var(--s4); }
 .sw.outline { background: transparent; box-shadow: inset 0 0 0 2px var(--s2); }
 .sw.ref { background: var(--axis); height: 2px; width: 14px; border-radius: 1px; }
 .sw.idle { background: var(--cell-idle); }

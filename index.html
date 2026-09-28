@@ -43,8 +43,8 @@
       <h2>Dispatcher</h2>
       <p class="hint">Bundles wait here for an idle worker. When the queue is full the bundler stops cutting bundles and conversions pile up upstream.</p>
       <label class="field">
-        <span class="lbl">Queue capacity <output data-out="dispatcherCapacity">10</output> <small>bundles</small></span>
-        <input type="range" data-param="dispatcherCapacity" min="1" max="100" step="1" value="10">
+        <span class="lbl">Queue capacity <output data-out="dispatcherCapacity">1,024</output> <small>bundles</small></span>
+        <input type="range" data-param="dispatcherCapacity" min="1" max="4096" step="1" value="1024">
       </label>
       <label class="field">
         <span class="lbl">Routing</span>
@@ -194,7 +194,7 @@
       </div>
       <div class="tile">
         <div class="label">Dispatcher queue</div>
-        <div class="value" id="kpi-dispatcher">0 / 10</div>
+        <div class="value" id="kpi-dispatcher">0 / 1,024</div>
         <div class="delta" id="kpi-upstream">0 at bundler</div>
       </div>
       <div class="tile">
@@ -304,6 +304,18 @@
         <div class="chart-wrap"><canvas id="chart-throughput"></canvas></div>
       </div>
       <div class="card">
+        <div class="card-head"><h2>Where in-flight data is</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>workers</span>
+            <span class="lg-item"><i class="sw s2"></i>dispatcher</span>
+            <span class="lg-item"><i class="sw s3"></i>bundler</span>
+            <span class="lg-item"><i class="sw s4"></i>upstream</span>
+            <span class="unit">conversions not yet written out</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-where"></canvas></div>
+      </div>
+      <div class="card">
         <div class="card-head"><h2>Dispatcher queue</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>bundles waiting</span>
@@ -336,6 +348,7 @@
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, where the expected ticks are the rate-driven part (estimated by simulation) plus the mean stall time. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already written out. A bundle is written atomically: none of its conversions count until the whole bundle completes, so a minute's completeness stays at 0% for about a bundle time and then jumps. "Complete through" is the most recent minute at which that minute and every older one are at least 99% complete.</li>
         <li><b>Age of in-flight data</b> looks at every conversion that has arrived but not yet been written out (held upstream, waiting at the bundler, queued at the dispatcher, or inside a bundle being processed) and shows how old it is now, as a histogram by age and as P50/P90/P99 over time. Ages are grouped by arrival minute. Both histograms size their axis from the widest range needed in the last 12 simulated hours, so the axis grows at once but shrinks only slowly.</li>
+        <li><b>Where in-flight data is</b> stacks the conversions not yet written out by stage: inside bundles on workers (a bundle counts in full until it completes), queued at the dispatcher, buffered at the bundler, and held upstream by a delay. The top of the stack is the in-flight total.</li>
         <li><b>Age percentiles of processed data</b> are the end-to-end ages of bundles at the moment they were written out, over a rolling one-hour window of completions.</li>
         <li><b>Fresh time</b> slides a 5-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the five minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
         <li><b>Conversion of Death</b> tags, for its duration, an extra share of <i>arriving</i> conversions as expensive with a fixed cost you choose (still capped at 4 hours). The tag travels with the conversions through the bundler and any upstream hold, so it follows when data arrived rather than when it was bundled. They stack on top of the configured expensive conversions. Workers stalled on one are marked with a red dot; stalls on the configured expensive conversions are not marked.</li>

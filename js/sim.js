@@ -150,7 +150,7 @@
     wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
     bundleSize: 1200,          // conversions per bundle (20 min at 10/tick)
     bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
-    dispatcherCapacity: 10,    // bundles the dispatcher can hold
+    dispatcherCapacity: 1024,  // bundles the dispatcher can hold
     routing: 'lowestIdle',     // lowestIdle | idle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     // Expensive conversions: a small share of conversions each cost a fixed
@@ -736,10 +736,11 @@
 
     snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled) {
       const t = this.tick;
-      let inProgress = 0, oldest = null, maxAge = 0;
+      let inProgress = 0, workerItems = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
         if (!w.bundle) continue;
         inProgress += w.bundle.remaining;
+        workerItems += w.bundle.size; // nothing is written out until the bundle completes
         if (oldest === null || w.bundle.createdTick < oldest) oldest = w.bundle.createdTick;
         const age = t - w.bundle.dispatchedTick;
         if (age > maxAge) maxAge = age;
@@ -762,6 +763,7 @@
         arrivals, dispatched, processed, cut: cut || 0,
         backlogItems: inProgress + queuedItems_ + this.intake.items + this.held.items,
         inProgressItems: inProgress,
+        workerItems,                 // conversions inside bundles being processed (not yet written out)
         dispatcherItems: queuedItems_,
         dispatcherQueued: this.dispatcher.length,
         dispatcherCapacity: this.config.dispatcherCapacity,
