@@ -140,7 +140,8 @@ button, input, select { font: inherit; color: inherit; }
 .incident input[type=number] {
   width: 64px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2);
 }
-.incident .btn { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+.incident .btn { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+.incident small { color: var(--text-muted); }
 .active-incidents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .active-incidents li {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -178,6 +179,7 @@ button, input, select { font: inherit; color: inherit; }
 .sw.ref { background: var(--axis); height: 2px; width: 14px; border-radius: 1px; }
 .sw.idle { background: var(--cell-idle); }
 .sw.offline { background: repeating-linear-gradient(45deg, var(--cell-offline) 0 3px, var(--cell-offline-ink) 3px 4px); }
+.sw.slowed { background: repeating-linear-gradient(45deg, var(--s1) 0 3px, rgba(255,255,255,0.75) 3px 4px); }
 .sw.prog { background: var(--cell-idle); position: relative; overflow: hidden; }
 .sw.prog::after { content: ""; position: absolute; left: 0; bottom: 0; height: 4px; width: 60%; background: #ffffff; opacity: 0.85; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); }
 .ramp { display: inline-block; width: 90px; height: 12px; border-radius: 3px; background: var(--ramp-css); }

@@ -120,16 +120,11 @@
         <button class="btn small" data-incident="spike">Fire</button>
       </div>
       <div class="incident">
-        <div class="inc-name">Slow workers</div>
-        <label>rate × <input type="number" id="slow-mag" min="0" max="1" step="0.05" value="0.25"></label>
-        <label>for <input type="number" id="slow-dur" min="1" max="4320" step="1" value="60"> min</label>
-        <button class="btn small" data-incident="slowdown">Fire</button>
-      </div>
-      <div class="incident">
-        <div class="inc-name">Worker outage</div>
-        <label><input type="number" id="outage-mag" min="1" max="100" step="1" value="30">% offline</label>
-        <label>for <input type="number" id="outage-dur" min="1" max="4320" step="1" value="60"> min</label>
-        <button class="btn small" data-incident="outage">Fire</button>
+        <div class="inc-name">Degraded workers</div>
+        <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
+        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers</label>
+        <label>for <input type="number" id="degrade-dur" min="1" max="4320" step="1" value="60"> min</label>
+        <button class="btn small" data-incident="degrade">Fire</button>
       </div>
       <div class="incident">
         <div class="inc-name">Upstream delay</div>
@@ -206,6 +201,7 @@
         <div class="legend">
           <span class="lg-item"><i class="sw idle"></i>idle</span>
           <span class="lg-item"><i class="ramp"></i><span class="ramp-lbl">working: fresh → 2× the expected bundle time</span></span>
+          <span class="lg-item"><i class="sw slowed"></i>slowed</span>
           <span class="lg-item"><i class="sw offline"></i>offline</span>
           <span class="lg-item"><i class="sw prog"></i>progress on current bundle</span>
         </div>
@@ -291,6 +287,7 @@
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, estimated by simulation. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
         <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
+        <li><b>Degraded workers</b> picks a random share of the pool and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>
       </ul>
     </details>

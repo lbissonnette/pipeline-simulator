@@ -201,6 +201,7 @@
       while (ws.length < n) {
         ws.push({
           id: ws.length, bundle: null, speed: 1, offlineUntil: -1,
+          degradations: [],   // { id, factor, until } from active incidents
           lastRate: 0, lastWorked: 0, processed: 0, completed: 0,
         });
       }
@@ -238,21 +239,33 @@
     }
 
     // ---------- incidents ----------
+    // type: 'spike'         magnitude = arrival multiplier
+    //       'degrade'       magnitude = { factor, fraction }: a random `fraction`
+    //                       of workers run at `factor` x their rate; factor 0 is
+    //                       a full outage (offline, skipped by idle routing)
+    //       'upstreamDelay' arrivals are held until the incident ends
+    //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
+      if (type === 'outage') { type = 'degrade'; magnitude = { factor: 0, fraction: magnitude }; }
+      else if (type === 'slowdown') { type = 'degrade'; magnitude = { factor: magnitude, fraction: 1 }; }
       const inc = {
         id: this.nextIncidentId++, type, magnitude, duration,
         start: this.tick + 1, end: this.tick + duration, workers: [],
       };
-      if (type === 'outage') {
-        const count = Math.round(this.workers.length * magnitude);
+      if (type === 'degrade') {
+        const factor = Math.max(0, magnitude.factor);
+        const count = Math.round(this.workers.length * Math.min(1, Math.max(0, magnitude.fraction)));
         const ids = this.workers.map(w => w.id);
         for (let i = ids.length - 1; i > 0; i--) {
           const j = this.rng.int(i + 1);
           [ids[i], ids[j]] = [ids[j], ids[i]];
         }
         inc.workers = ids.slice(0, count);
+        inc.factor = factor;
         for (const id of inc.workers) {
-          this.workers[id].offlineUntil = Math.max(this.workers[id].offlineUntil, inc.end);
+          const w = this.workers[id];
+          w.degradations.push({ id: inc.id, factor, until: inc.end });
+          if (factor === 0) w.offlineUntil = Math.max(w.offlineUntil, inc.end);
         }
       }
       this.incidents.push(inc);
@@ -262,21 +275,37 @@
     cancelIncident(id) {
       const inc = this.incidents.find(i => i.id === id);
       if (!inc) return;
-      if (inc.type === 'outage') {
-        for (const wid of inc.workers) if (this.workers[wid]) this.workers[wid].offlineUntil = -1;
+      if (inc.type === 'degrade') {
+        for (const wid of inc.workers) {
+          const w = this.workers[wid];
+          if (!w) continue;
+          w.degradations = w.degradations.filter(d => d.id !== id);
+          // offline only while some remaining zero-factor degradation covers this worker
+          w.offlineUntil = w.degradations.reduce((m, d) => d.factor === 0 ? Math.max(m, d.until) : m, -1);
+        }
       }
       if (inc.type === 'upstreamDelay') this.releaseHeld();
       this.incidents = this.incidents.filter(i => i.id !== id);
     }
 
     activeModifiers() {
-      let arrivalMult = 1, rateMult = 1, holdArrivals = false;
+      let arrivalMult = 1, holdArrivals = false;
       for (const inc of this.incidents) {
         if (inc.type === 'spike') arrivalMult *= inc.magnitude;
-        else if (inc.type === 'slowdown') rateMult *= inc.magnitude;
         else if (inc.type === 'upstreamDelay') holdArrivals = true;
       }
-      return { arrivalMult, rateMult, holdArrivals };
+      return { arrivalMult, holdArrivals };
+    }
+
+    // Product of the factors of the degradations still covering the worker.
+    degradeFactor(w) {
+      if (!w.degradations.length) return 1;
+      let f = 1, live = false;
+      for (const d of w.degradations) {
+        if (d.until >= this.tick) { f *= d.factor; live = true; }
+      }
+      if (!live) w.degradations = [];
+      return f;
     }
 
     releaseHeld() {
@@ -486,14 +515,16 @@
       }
 
       // 3. Processing: one bundle per worker
-      let processed = 0, busy = 0, offline = 0;
+      let processed = 0, busy = 0, offline = 0, slowed = 0;
       const latencies = [];
       for (const w of this.workers) {
         if (w.offlineUntil >= t) {
           offline++; w.lastRate = 0; w.lastWorked = 0;
           continue;
         }
-        const rate = sampleRate(this.rng, cfg.dist) * w.speed * mods.rateMult;
+        const factor = this.degradeFactor(w);
+        if (factor < 1) slowed++;
+        const rate = sampleRate(this.rng, cfg.dist) * w.speed * factor;
         w.lastRate = rate;
         w.lastWorked = 0;
         const b = w.bundle;
@@ -517,14 +548,14 @@
 
       if (!this.fresh || t % COHORT_TICKS === 0) this.fresh = this.freshTimes();
 
-      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut);
+      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed);
       this.history.push(snap);
       if (this.history.length > cfg.historyLength) this.history.shift();
       this.last = snap;
       return snap;
     }
 
-    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut) {
+    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed) {
       const t = this.tick;
       let inProgress = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
@@ -564,7 +595,7 @@
         fresh90: this.fresh ? this.fresh[90] : 0,
         fresh99: this.fresh ? this.fresh[99] : 0,
         completedBundles: latencies.length,
-        busy, offline, idle: n - busy - offline,
+        busy, offline, slowed: slowed || 0, idle: n - busy - offline,
         utilization: n - offline > 0 ? busy / (n - offline) : 0,
         expectedBundleTicks: bundleTicks,
         nominalCapacity: capacity,

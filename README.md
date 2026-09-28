@@ -56,8 +56,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. |
 | | Worker heterogeneity | Spread of a permanent per-worker speed multiplier. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
-| | Slow workers | Multiply every worker's rate for N minutes. |
-| | Worker outage | Take a percentage of workers offline for N minutes. |
+| | Degraded workers | Multiply the rate of a random percentage of workers for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,000); can be changed live. |
 | | Bundle size | Conversions per bundle (default 7,200, so a bundle takes ~2 h at 10 per tick). |

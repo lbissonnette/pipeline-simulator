@@ -141,8 +141,7 @@
     const num = id => parseFloat($(id).value);
     const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
     if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
-    else if (type === 'slowdown') sim.addIncident('slowdown', num('#slow-mag'), mins('#slow-dur'));
-    else if (type === 'outage') sim.addIncident('outage', num('#outage-mag') / 100, mins('#outage-dur'));
+    else if (type === 'degrade') sim.addIncident('degrade', { factor: num('#degrade-rate'), fraction: num('#degrade-pct') / 100 }, mins('#degrade-dur'));
     else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
     renderIncidents();
     if (!playing) render(true);
@@ -150,8 +149,9 @@
 
   const INCIDENT_LABEL = {
     spike: i => `Traffic spike ×${i.magnitude}`,
-    slowdown: i => `Slow workers ×${i.magnitude}`,
-    outage: i => `Outage: ${fmtInt(i.workers.length)} workers offline`,
+    degrade: i => i.factor === 0
+      ? `Outage: ${fmtInt(i.workers.length)} workers offline`
+      : `Degraded: ${fmtInt(i.workers.length)} workers at ×${i.factor}`,
     upstreamDelay: () => 'Upstream delay (holding arrivals)',
   };
 
@@ -382,6 +382,7 @@
 
   let theme = null;      // cached colours; rebuilt on theme change
   let hatch = null;      // cached CanvasPattern for offline cells
+  let hatchSlow = null;  // cached overlay pattern for slowed cells
   function buildRamp() {
     ramp = cssVar('--ramp').split(',').map(s => s.trim());
     theme = {
@@ -397,6 +398,13 @@
     px.strokeStyle = theme.offlineInk; px.lineWidth = 1.2;
     px.beginPath(); px.moveTo(-2, 6); px.lineTo(6, -2); px.moveTo(2, 10); px.lineTo(10, 2); px.stroke();
     hatch = sctx.createPattern(pc, 'repeat');
+    // slowed workers: translucent light stripes drawn over the cell fill
+    const sc = document.createElement('canvas');
+    sc.width = 8; sc.height = 8;
+    const sx = sc.getContext('2d');
+    sx.strokeStyle = 'rgba(255,255,255,0.7)'; sx.lineWidth = 1.5;
+    sx.beginPath(); sx.moveTo(-2, 6); sx.lineTo(6, -2); sx.moveTo(2, 10); sx.lineTo(10, 2); sx.stroke();
+    hatchSlow = sctx.createPattern(sc, 'repeat');
   }
 
   function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
@@ -482,6 +490,11 @@
       ctx.fillStyle = offline && cell >= 6 && hatch ? hatch : fill;
       if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
       else ctx.fillRect(x, y, cell, cell);
+      if (!offline && cell >= 6 && hatchSlow && w.degradations.length && sim.degradeFactor(w) < 1) {
+        ctx.fillStyle = hatchSlow;
+        if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
+        else ctx.fillRect(x, y, cell, cell);
+      }
       if (w.bundle && showBar) {
         const b = w.bundle;
         const p = 1 - b.remaining / b.size;
@@ -542,7 +555,8 @@
     const w = sim.workers[idx];
     const offline = w.offlineUntil >= sim.tick;
     const b = w.bundle;
-    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : b ? '' : ' · idle'}</div>` +
+    const df = offline ? 0 : sim.degradeFactor(w);
+    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : df < 1 ? ` · slowed ×${df.toFixed(2)}` : b ? '' : ' · idle'}</div>` +
       (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
            `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` : '') +
       `<div class="tt-row"><span>Last tick rate</span><b>${w.lastRate.toFixed(1)} conversions</b></div>` +
@@ -672,7 +686,7 @@
     $('#kpi-in').textContent = last ? fmt(last.arrivals) : '0';
     $('#kpi-out').textContent = last ? fmt(last.processed) : '0';
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
-    $('#kpi-workers').textContent = `${fmtInt(snap.idle)} idle · ${fmtInt(snap.offline)} offline`;
+    $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
     const dq = $('#kpi-dispatcher');
     dq.textContent = `${snap.dispatcherQueued} / ${snap.dispatcherCapacity}`;
     dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);

@@ -239,3 +239,36 @@ test('fresh time is zero when everything is complete', () => {
   const f = sim.freshTimes();
   assert.deepEqual(f, { 50: 0, 90: 0, 99: 0 });
 });
+
+test('degrade incident: a share of workers run slower, and factor 0 means offline', () => {
+  const sim = new Simulation({ arrivalRate: 8000, seed: 41 });
+  run(sim, 1500);
+  const inc = sim.addIncident('degrade', { factor: 0.25, fraction: 0.3 }, 120);
+  assert.equal(inc.workers.length, 300);
+  sim.step();
+  assert.equal(sim.last.slowed, 300);
+  assert.equal(sim.last.offline, 0);
+  // slowed workers still get work and still process, just less of it
+  const affected = new Set(inc.workers);
+  let slowSum = 0, slowN = 0, fastSum = 0, fastN = 0;
+  for (let i = 0; i < 60; i++) {
+    sim.step();
+    for (const w of sim.workers) {
+      if (!w.bundle) continue;
+      if (affected.has(w.id)) { slowSum += w.lastRate; slowN++; } else { fastSum += w.lastRate; fastN++; }
+    }
+  }
+  assert.ok(slowN > 0 && fastN > 0);
+  const ratio = (slowSum / slowN) / (fastSum / fastN);
+  assert.ok(Math.abs(ratio - 0.25) < 0.05, `ratio ${ratio}`);
+  run(sim, 120);
+  assert.equal(sim.last.slowed, 0);
+  // full outage through the same incident type
+  const out = sim.addIncident('degrade', { factor: 0, fraction: 0.1 }, 50);
+  sim.step();
+  assert.equal(sim.last.offline, out.workers.length);
+  sim.cancelIncident(out.id);
+  sim.step();
+  assert.equal(sim.last.offline, 0);
+  invariants(sim);
+});
