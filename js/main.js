@@ -338,6 +338,15 @@
     return { x: g.ox + c * (g.cell + g.gap) + g.cell / 2, y: g.oy + r * (g.cell + g.gap) + g.cell / 2 };
   }
 
+  // Endpoints of the arrow from the worker pool to Done.
+  function poolToSink(g) {
+    const R = NODE_R;
+    if (g.narrow) return { from: { x: g.sink.x, y: g.oy - 6 }, to: { x: g.sink.x, y: g.sink.y + R } };
+    const gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
+    const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
+    return { from: { x: gridRight + 6, y: gridMidY }, to: { x: g.sink.x - R, y: g.sink.y } };
+  }
+
   function spawnParticles(events, snap) {
     if (!geom) return;
     const now = performance.now();
@@ -365,9 +374,10 @@
       const from = g.narrow ? edge(g.dispatcher, 'down') : edge(g.dispatcher, 'out');
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 8, dur, kind: 'in' });
     }
-    for (const [i, e] of sample(events.filter(e => e.type === 'complete'), 24).entries()) {
-      const from = cellCenter(e.worker);
-      const to = g.narrow ? edge(g.sink, 'down') : edge(g.sink, 'in');
+    // completions travel along the pool -> Done arrow, not from each worker
+    const out = poolToSink(g);
+    for (const [i] of sample(events.filter(e => e.type === 'complete'), 24).entries()) {
+      const { from, to } = out;
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 10, dur, kind: 'out' });
     }
     // arrivals: a steady trickle, doubled during a spike
@@ -394,7 +404,7 @@
       surface: cssVar('--surface'), surface2: cssVar('--surface-2'), border: cssVar('--border'),
       ink: cssVar('--text'), ink2: cssVar('--text-2'), axis: cssVar('--axis'), critical: cssVar('--critical'),
       idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
-      s1: cssVar('--s1'), s2: cssVar('--s2'),
+      s1: cssVar('--s1'), s2: cssVar('--s2'), good: cssVar('--good'),
     };
   }
 
@@ -428,19 +438,20 @@
     const snap = sim.last;
     const C = theme;
 
-    const gridLeft = g.ox, gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
+    const gridLeft = g.ox;
     const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
     const r = NODE_R;
     if (!g.narrow) {
       drawArrow(ctx, g.source.x, g.source.y + r, g.bundler.x, g.bundler.y - r, C.axis);
       drawArrow(ctx, g.bundler.x, g.bundler.y + r, g.dispatcher.x, g.dispatcher.y - r, C.axis);
       drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, gridLeft - 6, gridMidY, C.axis);
-      drawArrow(ctx, gridRight + 6, gridMidY, g.sink.x - r, g.sink.y, C.axis);
     } else {
       drawArrow(ctx, g.source.x + r, g.source.y, g.bundler.x - r, g.bundler.y, C.axis);
       drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.dispatcher.x - r, g.dispatcher.y, C.axis);
       drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.sink.x - r, g.sink.y, C.axis);
     }
+    const out = poolToSink(g);
+    drawArrow(ctx, out.from.x, out.from.y, out.to.x, out.to.y, C.axis);
     const holding = snap.heldItems > 0;
     const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
     const blocked = full && snap.intakeItems >= sim.config.bundleSize;
@@ -535,7 +546,7 @@
       ctx.beginPath(); ctx.arc(x, y, p.kind === 'arr' ? 2.5 : 3.5, 0, Math.PI * 2);
       ctx.fillStyle = C.surface; ctx.fill();
       ctx.beginPath(); ctx.arc(x, y, p.kind === 'arr' ? 1.5 : 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = p.kind === 'out' ? C.s2 : C.s1; ctx.fill();
+      ctx.fillStyle = p.kind === 'out' ? C.good : C.s1; ctx.fill();
     }
     particles = alive;
   }
