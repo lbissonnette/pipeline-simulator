@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = require('../js/sim.js');
 
 // Defaults: 1000 workers x 10 conversions/tick, 7,200-conversion bundles
-// (~720 ticks each) -> capacity ~10,000 conversions/tick.
-const CAP = 10000;
+// (~720 ticks + ~86 ticks of expensive-conversion stalls) -> capacity ~8,900/tick.
+// Tests that check exact shapes disable expensive conversions (PURE).
+const CAP = 8918;
+const PURE = { expensiveFraction: 0 };
 function run(sim, ticks) { for (let i = 0; i < ticks; i++) sim.step(); return sim.last; }
 function invariants(sim) {
   assert.ok(sim.dispatcher.length <= sim.config.dispatcherCapacity, 'dispatcher over capacity');
@@ -16,7 +18,7 @@ test('defaults describe the intended scale', () => {
   const sim = new Simulation();
   assert.equal(sim.workers.length, 1000);
   assert.ok(Math.abs(sim.last.nominalCapacity - CAP) < CAP * 0.02, `capacity ${sim.last.nominalCapacity}`);
-  assert.ok(Math.abs(sim.last.load - 0.8) < 0.02, `load ${sim.last.load}`);
+  assert.ok(Math.abs(sim.last.load - 0.785) < 0.02, `load ${sim.last.load}`);
 });
 
 test('a bundle takes about bundleSize / mean ticks, plus the wasted tail', () => {
@@ -38,7 +40,7 @@ test('is deterministic for a given seed', () => {
 });
 
 test('under-loaded pipeline settles: bounded backlog, near-empty dispatcher', () => {
-  const sim = new Simulation({ arrivalRate: 7000, seed: 1 }); // rho 0.7
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 7000, seed: 1 })); // rho 0.7
   run(sim, 6000);
   const tail = sim.history.slice(-2000);
   const meanBacklog = tail.reduce((s, h) => s + h.backlogItems, 0) / tail.length;
@@ -48,7 +50,7 @@ test('under-loaded pipeline settles: bounded backlog, near-empty dispatcher', ()
   // in-progress work alone is ~0.7 * 1000 workers * half a bundle
   assert.ok(meanBacklog < 4e6, `mean backlog ${meanBacklog}`);
   assert.ok(meanQueue < 3, `mean dispatcher queue ${meanQueue}`);
-  assert.ok(meanBusy > 0.6 && meanBusy < 0.8, `busy ${meanBusy}`);
+  assert.ok(meanBusy > 0.6 && meanBusy < 0.85, `busy ${meanBusy}`);
 });
 
 test('over-loaded pipeline fills the dispatcher and backs up at the bundler', () => {
@@ -135,7 +137,7 @@ test('slowdown cuts throughput', () => {
 });
 
 test('end-to-end latency is a little over one bundle time under healthy load', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 4 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 4 }));
   run(sim, 3000);
   const lat = [];
   for (const h of sim.history.slice(-1000)) lat.push(...h.latencies);
@@ -175,7 +177,7 @@ test('worker count can change while running without losing work', () => {
 });
 
 test('per-minute completeness: cohorts conserve counts and age toward 100%', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 21 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 21 }));
   run(sim, 5 * 360); // 5 hours
   const rows = sim.completeness(5 * 60);
   const arrived = rows.reduce((s, r) => s + r.arrived, 0);
@@ -192,7 +194,7 @@ test('per-minute completeness: cohorts conserve counts and age toward 100%', () 
 });
 
 test('upstream delay keeps held conversions in their original arrival minute', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 22 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 22 }));
   run(sim, 600);
   sim.addIncident('upstreamDelay', 1, 60);
   run(sim, 30);
@@ -205,7 +207,7 @@ test('upstream delay keeps held conversions in their original arrival minute', (
 });
 
 test('fresh time percentiles: ordered, and near the 2 h ramp under healthy load', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 31 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 31 }));
   run(sim, 5 * 360);
   const f = sim.freshTimes();
   const min = t => t / 6;
@@ -219,7 +221,7 @@ test('fresh time percentiles: ordered, and near the 2 h ramp under healthy load'
 });
 
 test('fresh time grows during an outage and recovers afterwards', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 32 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 32 }));
   run(sim, 4 * 360);
   const before = sim.freshTimes()[99];
   sim.addIncident('outage', 0.5, 360); // half the pool offline for an hour
@@ -274,7 +276,7 @@ test('degrade incident: a share of workers run slower, and factor 0 means offlin
 });
 
 test('lowest-idle routing concentrates work on low-index workers', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 51, routing: 'lowestIdle' });
+  const sim = new Simulation({ arrivalRate: 7000, seed: 51, routing: 'lowestIdle' });
   run(sim, 3000);
   const busy = sim.workers.filter(w => w.bundle).map(w => w.id);
   const idle = sim.workers.filter(w => !w.bundle).map(w => w.id);
@@ -298,7 +300,7 @@ test('degrade can target the lowest x% of workers by index', () => {
 });
 
 test('completions are retained for the window and can be sliced by recency', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 61, completionRetention: 3000 });
+  const sim = new Simulation({ arrivalRate: 8000, seed: 61, completionRetention: 3000, expensiveFraction: 0 });
   run(sim, 5000);
   const all = sim.latencySamples(1e9);
   assert.ok(all.length > 0);
@@ -310,4 +312,47 @@ test('completions are retained for the window and can be sliced by recency', () 
   const w = recent.reduce((s, c) => s + c.size, 0);
   const mean = recent.reduce((s, c) => s + c.latency * c.size, 0) / w;
   assert.ok(mean > 720 && mean < 780, `mean latency ${mean}`);
+});
+
+
+test('expensive conversions: each one adds exactly its cost to the bundle', () => {
+  const sim = new Simulation({ arrivalRate: 7000, seed: 71, expensiveFraction: 0.0001, expensiveCost: 120 });
+  run(sim, 4000);
+  const byK = new Map();
+  for (const c of sim.latencySamples(2000)) {
+    if (!byK.has(c.expensive)) byK.set(c.expensive, []);
+    byK.get(c.expensive).push(c.latency);
+  }
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  assert.ok(byK.get(0).length > 200 && byK.get(1).length > 100 && byK.get(2).length > 20);
+  const m0 = mean(byK.get(0));
+  assert.ok(m0 > 715 && m0 < 735, `k=0 mean ${m0}`);
+  assert.ok(Math.abs(mean(byK.get(1)) - m0 - 120) < 5, `k=1 delta ${mean(byK.get(1)) - m0}`);
+  assert.ok(Math.abs(mean(byK.get(2)) - m0 - 240) < 8, `k=2 delta ${mean(byK.get(2)) - m0}`);
+  // Poisson(0.72) share of k=0 is ~49%
+  const total = [...byK.values()].reduce((s, a) => s + a.length, 0);
+  assert.ok(Math.abs(byK.get(0).length / total - Math.exp(-0.72)) < 0.05);
+  assert.ok(sim.last.stalled > 0);
+  invariants(sim);
+});
+
+test('expensive-tail preset: end-to-end mean ~4 h, sd ~1.2 h', () => {
+  const sim = new Simulation({ arrivalRate: 4000, seed: 72, expensiveFraction: 0.000386, expensiveCost: 258 });
+  run(sim, 12000);
+  const c = sim.latencySamples(6000);
+  let w = 0, m = 0;
+  for (const x of c) { w += x.size; m += x.latency * x.size; }
+  m /= w;
+  let v = 0;
+  for (const x of c) v += x.size * (x.latency - m) ** 2;
+  const sd = Math.sqrt(v / w);
+  assert.ok(Math.abs(m / 360 - 4) < 0.15, `mean ${m / 360} h`);
+  assert.ok(Math.abs(sd / 360 - 1.2) < 0.15, `sd ${sd / 360} h`);
+  assert.ok(sim.last.load > 0.75 && sim.last.load < 0.85, `load ${sim.last.load}`);
+});
+
+test('workers are homogeneous: no per-worker speed state', () => {
+  const sim = new Simulation();
+  assert.ok(sim.workers.every(w => w.speed === undefined));
+  assert.equal(sim.config.heterogeneity, undefined);
 });

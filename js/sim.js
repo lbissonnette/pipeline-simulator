@@ -131,11 +131,12 @@
 
   // ---------- defaults ----------
   // Defaults assume a tick of 10 seconds: a worker does 10 conversions per
-  // tick (1/s), a bundle of 7,200 takes ~720 ticks (2 hours), and 1,000
-  // workers give ~10,000 conversions per tick of capacity.
+  // tick (1/s), a bundle of 7,200 takes ~720 ticks (2 hours) plus ~14 min of
+  // expensive-conversion stalls, and 1,000 identical workers give ~8,900
+  // conversions per tick of capacity. Workers are homogeneous by design.
   const DEFAULTS = {
     workers: 1000,
-    arrivalRate: 8000,         // mean conversions per tick (Poisson)
+    arrivalRate: 7000,         // mean conversions per tick (Poisson)
     waveAmplitude: 0,          // 0..1 modulation of arrivals
     wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
     bundleSize: 7200,          // conversions per bundle
@@ -143,7 +144,10 @@
     dispatcherCapacity: 10,    // bundles the dispatcher can hold
     routing: 'lowestIdle',     // lowestIdle | idle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
-    heterogeneity: 0,          // sd of per-worker permanent speed multiplier
+    // Expensive conversions: a small share of conversions each cost a fixed
+    // extra processing time. A bundle holding k of them stalls k x cost ticks.
+    expensiveFraction: 0.0001, // share of conversions that are expensive (0.01%)
+    expensiveCost: 120,        // extra ticks per expensive conversion (20 min)
     historyLength: 4320,       // 12 h
     completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
     seed: 42,
@@ -208,24 +212,14 @@
       }
       while (ws.length < n) {
         ws.push({
-          id: ws.length, bundle: null, speed: 1, offlineUntil: -1,
+          id: ws.length, bundle: null, offlineUntil: -1,
           degradations: [],   // { id, factor, until } from active incidents
           lastRate: 0, lastWorked: 0, processed: 0, completed: 0,
         });
       }
-      if (fresh) this.regenerateSpeeds();
       this.config.workers = n;
       if (this.config.routing === 'sticky') {
         for (const b of this.dispatcher) if (b.worker >= n) b.worker = this.rng.int(n);
-      }
-    }
-
-    regenerateSpeeds() {
-      const h = this.config.heterogeneity;
-      const srng = makeRng(this.config.seed ^ 0x9e3779b9);
-      for (const w of this.workers) {
-        const s = 1 + h * srng.gaussian();
-        w.speed = Math.min(3, Math.max(0.1, s));
       }
     }
 
@@ -236,10 +230,6 @@
       this.config = next;
       if (partial.workers !== undefined && partial.workers !== this.workers.length) {
         this.applyWorkerCount(partial.workers, false);
-        this.regenerateSpeeds();
-      }
-      if (partial.heterogeneity !== undefined && partial.heterogeneity !== prev.heterogeneity) {
-        this.regenerateSpeeds();
       }
       if (partial.routing === 'sticky' && prev.routing !== 'sticky') {
         for (const b of this.dispatcher) if (b.worker === null) b.worker = this.rng.int(this.workers.length);
@@ -373,12 +363,19 @@
         head.count -= take; need -= take;
         if (head.count <= 1e-9) q.shift();
       }
+      // expensive conversions: how many, and where in the bundle they sit
+      const cfg = this.config;
+      const k = cfg.expensiveFraction > 0 ? Math.min(Math.round(size), this.rng.poisson(size * cfg.expensiveFraction)) : 0;
+      const stalls = [];
+      for (let i = 0; i < k; i++) stalls.push(this.rng.uniform() * size);
+      stalls.sort((x, y) => x - y);
       const b = {
         id: this.nextBundleId++, size, remaining: size,
         cohorts, cursor: 0,                       // cursor: index of the cohort being processed
         createdTick: cohorts.length ? cohorts[0].firstTick : this.tick,
         cutTick: this.tick, dispatchedTick: null,
-        worker: this.config.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
+        worker: cfg.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
+        expensive: k, stalls, stallLeft: 0,       // stall points (offsets) and ticks left in the current stall
       };
       this.intake.items -= size;
       if (this.intake.items <= 1e-9 || !q.length) { this.intake.items = 0; this.intake.oldestTick = null; this.intake.cohorts = []; }
@@ -568,7 +565,7 @@
       }
 
       // 3. Processing: one bundle per worker
-      let processed = 0, busy = 0, offline = 0, slowed = 0;
+      let processed = 0, busy = 0, offline = 0, slowed = 0, stalled = 0;
       const latencies = [];
       for (const w of this.workers) {
         if (w.offlineUntil >= t) {
@@ -577,13 +574,28 @@
         }
         const factor = this.degradeFactor(w);
         if (factor < 1) slowed++;
-        const rate = sampleRate(this.rng, cfg.dist) * w.speed * factor;
+        const rate = sampleRate(this.rng, cfg.dist) * factor;
         w.lastRate = rate;
         w.lastWorked = 0;
         const b = w.bundle;
         if (!b) continue;
         busy++;
-        const take = Math.min(rate, b.remaining);
+        // stalled on an expensive conversion: the stall burns wall-clock ticks
+        // (a degraded worker burns them proportionally slower)
+        if (b.stallLeft > 0) {
+          b.stallLeft -= factor;
+          w.lastRate = 0;
+          stalled++;
+          continue;
+        }
+        let take = Math.min(rate, b.remaining);
+        const done = b.size - b.remaining;
+        if (b.stalls.length && done + take >= b.stalls[0]) {
+          // reach the expensive conversion, then stall for its cost
+          take = Math.max(0, Math.min(take, b.stalls[0] - done));
+          b.stalls.shift();
+          b.stallLeft = cfg.expensiveCost;
+        }
         b.remaining -= take;
         this.creditProcessed(b, take);
         w.lastWorked = take;
@@ -593,7 +605,7 @@
           w.bundle = null;
           w.completed++;
           latencies.push(t - b.createdTick);
-          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size });
+          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive });
           this.totals.bundlesCompleted++;
           this.events.push({ type: 'complete', worker: w.id });
         }
@@ -603,14 +615,21 @@
       if (!this.fresh || t % COHORT_TICKS === 0) this.fresh = this.freshTimes();
       this.pruneCompletions();
 
-      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed);
+      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled);
       this.history.push(snap);
       if (this.history.length > cfg.historyLength) this.history.shift();
       this.last = snap;
       return snap;
     }
 
-    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed) {
+    // Expected ticks per bundle: the rate-driven part (by simulation) plus the
+    // mean stall time from expensive conversions.
+    expectedBundleTicks() {
+      const cfg = this.config;
+      return expectedBundleTicksCached(cfg.dist, cfg.bundleSize) + cfg.bundleSize * cfg.expensiveFraction * cfg.expensiveCost;
+    }
+
+    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled) {
       const t = this.tick;
       let inProgress = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
@@ -630,7 +649,7 @@
       latencies.sort((a, b) => a - b);
       const pct = p => latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))] : null;
       const n = this.workers.length;
-      const bundleTicks = expectedBundleTicksCached(this.config.dist, this.config.bundleSize);
+      const bundleTicks = this.expectedBundleTicks();
       const capacity = (n * this.config.bundleSize) / bundleTicks;
       offline = offline || 0;
       return {
@@ -650,7 +669,7 @@
         fresh90: this.fresh ? this.fresh[90] : 0,
         fresh99: this.fresh ? this.fresh[99] : 0,
         completedBundles: latencies.length,
-        busy, offline, slowed: slowed || 0, idle: n - busy - offline,
+        busy, offline, slowed: slowed || 0, stalled: stalled || 0, idle: n - busy - offline,
         utilization: n - offline > 0 ? busy / (n - offline) : 0,
         expectedBundleTicks: bundleTicks,
         nominalCapacity: capacity,

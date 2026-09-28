@@ -3,9 +3,10 @@
 An interactive, dependency-free simulation of a streaming conversion pipeline.
 Conversions (sign-ups, purchases after an ad) arrive at a configurable rate, are
 cut into bundles, queue at a bounded dispatcher, and are handed one at a time to
-a pool of 1,000 workers. Each tick (10 seconds) every busy worker completes a
-random number of conversions, drawn from a distribution you control; with the
-defaults a bundle takes about two hours. Turn the knobs, inject delays, and
+a pool of 1,000 identical workers. Each tick (10 seconds) every busy worker
+completes a random number of conversions, drawn from a distribution you
+control, and a small share of expensive conversions add fixed stalls; with the
+defaults a bundle takes a little over two hours. Turn the knobs, inject delays, and
 watch backlogs form and clear.
 
 Live: <https://lbissonnette.github.io/pipeline-simulator/>
@@ -59,8 +60,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
-| | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. |
-| | Worker heterogeneity | Spread of a permanent per-worker speed multiplier. |
+| | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
+| | Expensive conversions | Share of conversions that each cost a fixed extra time (default 0.01% at 20 min). A bundle with k of them stalls k × cost. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
 | | Degraded workers | Multiply the rate of a percentage of workers, the lowest by index (default) or chosen at random, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
@@ -69,9 +70,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
 
-Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **Slow tail**
-(bimodal rate), **Hot partitions** (sticky routing + uneven workers) and
-**Bursty traffic**. The speed control runs from 1 simulated minute per real
+Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **Expensive tail**
+(0.039% of conversions cost 43 min: end-to-end mean 4 h, sd 1.2 h),
+**Sticky partitions** and **Bursty traffic**. The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
 tick.
 
@@ -91,20 +92,28 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    assigns each bundle a worker up front and waits for that worker, even if it
    is busy or offline, like a static partition assignment.
 4. **Processing**: each worker holds one bundle. Every tick it draws a rate `r`
-   (conversions per tick) from the distribution, multiplies by its speed factor
-   and any slowdown, and completes `r` conversions of its bundle. When the
+   (conversions per tick) from the distribution, multiplies by any degradation,
+   and completes `r` conversions of its bundle. Workers are identical. When the
    bundle is done the worker picks up the next bundle on the following tick.
-   With 10 per tick and 7,200 per bundle, a bundle takes ~720 ticks = 2 hours.
-5. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
-   expected ticks per bundle are estimated by simulation. With the defaults
-   that is ~10,000 conversions per tick (1,000/s). The load ratio
+   With 10 per tick and 7,200 per bundle, the rate-driven part of a bundle
+   takes ~720 ticks = 2 hours. Per-tick noise averages out over a bundle
+   (±1 minute), so it does not spread end-to-end times.
+5. **Expensive conversions**: each conversion is independently expensive with
+   probability `share`, so a bundle holds Poisson(B × share) of them at random
+   positions. Reaching one stalls the worker for `cost` ticks. Extra time per
+   bundle has mean B × share × cost and sd cost × √(B × share): the default
+   0.01% at 20 min adds ~14 min ± 17 min; 0.039% at 43 min gives an
+   end-to-end mean of 4 h with sd 1.2 h.
+6. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
+   expected ticks are the rate-driven part (estimated by simulation) plus the
+   mean stall time. With the defaults that is ~8,900 conversions per tick. The load ratio
    ρ = arrivals ÷ capacity is shown live; above 1 the dispatcher pins at its
    capacity and the backlog grows without bound at the bundler.
-6. **Latency** of a bundle is measured from the tick its oldest conversion
+7. **Latency** of a bundle is measured from the tick its oldest conversion
    arrived to the tick it finished, so it includes time spent filling the
    bundle, waiting at the bundler and in the dispatcher, and being processed.
    Under the Healthy preset the median is a little over two hours.
-7. **Arrival cohorts**: every conversion is tagged with the minute it arrived
+8. **Arrival cohorts**: every conversion is tagged with the minute it arrived
    in, through the intake buffer (and the upstream-delay hold) into its bundle.
    As a worker makes progress on a bundle, processed conversions are credited
    to the bundle's cohorts oldest-minute first. `Simulation#completeness(n)`

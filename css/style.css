@@ -181,6 +181,9 @@ button, input, select { font: inherit; color: inherit; }
 .sw.ref { background: var(--axis); height: 2px; width: 14px; border-radius: 1px; }
 .sw.idle { background: var(--cell-idle); }
 .sw.offline { background: repeating-linear-gradient(45deg, var(--cell-offline) 0 3px, var(--cell-offline-ink) 3px 4px); }
+.sw.stalled { background: var(--cell-idle); position: relative; }
+.sw.stalled::after { content: ""; position: absolute; right: 1px; top: 1px; width: 5px; height: 5px; border-radius: 1px; background: var(--s2); }
+.subhead { font-size: 12px; font-weight: 600; color: var(--text-2); margin: 6px 0 0; }
 .sw.slowed { background: repeating-linear-gradient(45deg, var(--s1) 0 3px, rgba(255,255,255,0.75) 3px 4px); }
 .sw.prog { background: var(--cell-idle); position: relative; overflow: hidden; }
 .sw.prog::after { content: ""; position: absolute; left: 0; bottom: 0; height: 4px; width: 60%; background: #ffffff; opacity: 0.85; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); }

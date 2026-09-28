@@ -62,21 +62,26 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', heterogeneity: 0 };
+  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0001, expensiveCost: 120 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
-    healthy:    Object.assign({}, BASE, { arrivalRate: 8000, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 12000, dist: NORMAL }),
-    slowtail:   Object.assign({}, BASE, { arrivalRate: 8000, dist: { type: 'bimodal', mean: 10, sd: 2, slowFraction: 0.2, slowFactor: 0.25 } }),
-    hotspots:   Object.assign({}, BASE, { arrivalRate: 7500, routing: 'sticky', heterogeneity: 0.4, dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 8000, waveAmplitude: 0.6, dist: NORMAL }),
+    healthy:    Object.assign({}, BASE, { arrivalRate: 7000, dist: NORMAL }),
+    overloaded: Object.assign({}, BASE, { arrivalRate: 11000, dist: NORMAL }),
+    // 2.8 expensive conversions per bundle at 43 min each: +2 h mean, 1.2 h sd
+    expensive:  Object.assign({}, BASE, { arrivalRate: 4000, expensiveFraction: 0.000386, expensiveCost: 258, dist: NORMAL }),
+    sticky:     Object.assign({}, BASE, { arrivalRate: 7000, routing: 'sticky', dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 7000, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------
   function fmtParam(name, v) {
     switch (name) {
-      case 'waveAmplitude': case 'heterogeneity': case 'dist.slowFraction': case 'dist.slowFactor':
+      case 'waveAmplitude': case 'dist.slowFraction': case 'dist.slowFactor':
         return Math.round(v * 100) + '%';
+      case 'expensiveFraction':
+        return (v * 100).toFixed(3) + '%';
+      case 'expensiveCost':
+        return fmtMinutes(v);
       case 'arrivalRate': case 'bundleSize': case 'workers':
         return fmtInt(v);
       case 'dist.mean': case 'dist.sd':
@@ -109,6 +114,9 @@
     sim.update(partial);
     geom = null;
     $('#arrival-rate-s').textContent = fmtInt(partial.arrivalRate / TICK_SECONDS);
+    const perBundle = partial.bundleSize * partial.expensiveFraction;
+    $('#expensive-per-bundle').textContent = perBundle.toFixed(2);
+    $('#expensive-extra').textContent = fmtDur(perBundle * partial.expensiveCost);
     $('#rate-per-s').textContent = (dist.mean / TICK_SECONDS).toFixed(2).replace(/0$/, '');
     $('.bimodal-only').hidden = dist.type !== 'bimodal';
     drawDistribution();
@@ -252,7 +260,7 @@
     ctx.closePath();
   }
 
-  function bundleTicks() { return expectedBundleTicks(sim.config.dist, sim.config.bundleSize); }
+  function bundleTicks() { return sim.expectedBundleTicks(); }
 
   function updateCapacity() {
     const ticks = bundleTicks();
@@ -503,6 +511,11 @@
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fillRect(x + 1, y + cell - bh - 1, Math.round((cell - 2) * p), bh);
+        if (b.stallLeft > 0 && !offline) {
+          const d = Math.max(3, Math.round(cell * 0.3));
+          ctx.fillStyle = C.s2;
+          ctx.fillRect(x + cell - d - 1, y + 1, d, d);
+        }
       }
       if (hoveredWorker === i) {
         ctx.lineWidth = 2; ctx.strokeStyle = C.ink;
@@ -560,9 +573,9 @@
     const df = offline ? 0 : sim.degradeFactor(w);
     tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : df < 1 ? ` · slowed ×${df.toFixed(2)}` : b ? '' : ' · idle'}</div>` +
       (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
-           `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` : '') +
+           `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` +
+           `<div class="tt-row"><span>Expensive conversions</span><b>${b.expensive}${b.stallLeft > 0 ? ` · stalled, ${fmtDur(b.stallLeft)} left` : b.stalls.length ? ` · ${b.stalls.length} ahead` : ''}</b></div>` : '') +
       `<div class="tt-row"><span>Last tick rate</span><b>${w.lastRate.toFixed(1)} conversions</b></div>` +
-      `<div class="tt-row"><span>Speed factor</span><b>×${w.speed.toFixed(2)}</b></div>` +
       `<div class="tt-row"><span>Completed</span><b>${w.completed} bundles · ${fmt(w.processed)} conv.</b></div>`;
     tooltip.hidden = false;
     const tw = tooltip.offsetWidth;
@@ -738,7 +751,7 @@
     $('#kpi-in').textContent = last ? fmt(last.arrivals) : '0';
     $('#kpi-out').textContent = last ? fmt(last.processed) : '0';
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
-    $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
+    $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.stalled ? `${fmtInt(snap.stalled)} stalled` : null, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
     const dq = $('#kpi-dispatcher');
     dq.textContent = `${snap.dispatcherQueued} / ${snap.dispatcherCapacity}`;
     dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);
