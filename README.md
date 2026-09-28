@@ -33,13 +33,13 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   header shows the most recent minute through which everything is at least
   99% complete. Hover for the
   minute's arrived and processed counts.
-- **Fresh time** – P50, P90 and P99 over time. A 3-minute window slides over
+- **Fresh time** – P50, P90 and P99 over time. A 5-minute window slides over
   the arrival minutes; each window's completeness is processed ÷ arrived across
-  its three minutes. The P99 fresh time is the age of the oldest window still
+  its five minutes. The P99 fresh time is the age of the oldest window still
   below 99% complete (P90 and P50 likewise), counted from the start of the
   window's oldest minute. Recomputed every simulated minute; 0 means every
   window has passed that threshold. Under the Healthy preset it settles near
-  P50 1h, P90 1h48m, P99 2h.
+  P50 25m, P90 31m, P99 47m.
 - **End-to-end processing time distribution** – a histogram of bundle
   end-to-end time for the last 12 hours and the last 7 days on the same axes.
   Each window is weighted by conversions and normalised to its own total, so
@@ -122,7 +122,7 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
    is what the completeness chart plots. `Simulation#freshTimes(levels,
    windowCohorts)` returns the fresh time in ticks per level (default levels
-   50, 90 and 99 over 3-minute windows); each tick's snapshot carries the
+   50, 90 and 99 over 5-minute windows); each tick's snapshot carries the
    latest values as `fresh50`, `fresh90` and `fresh99`. Every bundle
    completion is kept for 7 days as `{ tick, latency, size }`;
    `Simulation#latencySamples(windowTicks)` returns the ones within a window.
