@@ -41,6 +41,7 @@
       this.titleOf = opts.titleOf || (row => `Tick ${row.tick}`);
       this.format = opts.format || fmt;        // value formatter for tooltip
       this.yMax = opts.yMax || null;           // fixed y axis top (else auto)
+      this.yFormat = opts.yFormat || fmt;      // axis label formatter
       this.extraRows = opts.extraRows || null; // row => [[label, value], ...] appended to the tooltip
       this.hoverIndex = null;
       this.history = [];
@@ -131,7 +132,7 @@
         const y = Math.round(yOf(v)) + 0.5;
         ctx.strokeStyle = v === 0 ? axis : grid;
         ctx.beginPath(); ctx.moveTo(l, y); ctx.lineTo(l + pw, y); ctx.stroke();
-        ctx.fillStyle = muted; ctx.fillText(fmt(v), l - 6, y);
+        ctx.fillStyle = muted; ctx.fillText(this.yFormat(v), l - 6, y);
       }
       // x labels
       if (n > 1) {

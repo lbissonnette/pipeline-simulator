@@ -30,6 +30,8 @@
     return `${(h / 24).toFixed(1)}d`;
   }
   const fmtMinutes = ticks => (ticks / TICKS_PER_MIN).toFixed(0) + ' min';
+  // axis labels in hours: 0, 0.5, 1, 1.5 ...
+  const fmtHours = h => (Math.abs(h - Math.round(h)) < 1e-9 ? String(Math.round(h)) : h.toFixed(h < 1 ? 2 : 1).replace(/0$/, '')) + 'h';
   // Constant-width variant for live readouts: always "Hh MMm" (e.g. 0h 07m, 1h 59m, 2h 00m).
   function fmtDurFixed(ticks) {
     if (ticks === null || ticks === undefined || Number.isNaN(ticks)) return '–';
@@ -577,9 +579,11 @@
       series: [{ key: 'arrivals', name: 'Arrivals / tick', color: '--s1' }, { key: 'processed', name: 'Throughput / tick', color: '--s2' }],
       reference: { key: 'nominalCapacity', name: 'Expected capacity' },
     }, timeOpts)),
-    latency: new LineChart($('#chart-latency'), Object.assign({
-      series: [{ key: 'latP50Min', name: 'p50 (min)', color: '--s1' }, { key: 'latP95Min', name: 'p95 (min)', color: '--s2' }],
-    }, timeOpts)),
+    latency: new LineChart($('#chart-latency'), Object.assign({}, timeOpts, {
+      series: [{ key: 'latP50Hr', name: 'p50', color: '--s1' }, { key: 'latP95Hr', name: 'p95', color: '--s2' }],
+      yFormat: fmtHours,
+      format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_HOUR),
+    })),
     dispatcher: new LineChart($('#chart-dispatcher'), Object.assign({
       series: [{ key: 'dispatcherQueued', name: 'Bundles waiting', color: '--s1' }], fill: true,
       reference: { key: 'dispatcherCapacity', name: 'Capacity' },
@@ -594,11 +598,12 @@
   };
   charts.fresh = new LineChart($('#chart-fresh'), Object.assign({}, timeOpts, {
     series: [
-      { key: 'fresh50Min', name: 'P50', color: '--s1' },
-      { key: 'fresh90Min', name: 'P90', color: '--s2' },
-      { key: 'fresh99Min', name: 'P99', color: '--s3' },
+      { key: 'fresh50Hr', name: 'P50', color: '--s1' },
+      { key: 'fresh90Hr', name: 'P90', color: '--s2' },
+      { key: 'fresh99Hr', name: 'P99', color: '--s3' },
     ],
-    format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_MIN),
+    yFormat: fmtHours,
+    format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_HOUR),
   }));
 
   // ---------- E2E processing-time histogram (6 h vs 7 d) ----------
@@ -691,15 +696,15 @@
         const all = [];
         for (const arr of st.latQ) for (const v of arr) all.push(v);
         all.sort((a, b) => a - b);
-        st.p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_MIN;
-        st.p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_MIN;
+        st.p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_HOUR;
+        st.p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_HOUR;
       } else if (st.latCount < 5) { st.p50 = null; st.p95 = null; }
       st.rows.push({
         tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
         dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
         arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
-        latP50Min: st.p50, latP95Min: st.p95,
-        fresh50Min: h.fresh50 / TICKS_PER_MIN, fresh90Min: h.fresh90 / TICKS_PER_MIN, fresh99Min: h.fresh99 / TICKS_PER_MIN,
+        latP50Hr: st.p50, latP95Hr: st.p95,
+        fresh50Hr: h.fresh50 / TICKS_PER_HOUR, fresh90Hr: h.fresh90 / TICKS_PER_HOUR, fresh99Hr: h.fresh99 / TICKS_PER_HOUR,
       });
       st.lastTick = h.tick;
     }
@@ -723,9 +728,9 @@
     }
     $('#kpi-oldest').textContent = fmtDur(snap.oldestAge);
     const last = rows[rows.length - 1];
-    if (last && last.latP95Min !== null) {
-      $('#kpi-p95').textContent = fmtDur(last.latP95Min * TICKS_PER_MIN);
-      $('#kpi-p50').textContent = `p50 ${fmtDur(last.latP50Min * TICKS_PER_MIN)} · 30-min window`.replace(' window', '');
+    if (last && last.latP95Hr !== null) {
+      $('#kpi-p95').textContent = fmtDur(last.latP95Hr * TICKS_PER_HOUR);
+      $('#kpi-p50').textContent = `p50 ${fmtDur(last.latP50Hr * TICKS_PER_HOUR)} · 30-min`;
     } else {
       $('#kpi-p95').textContent = '–';
       $('#kpi-p50').textContent = 'no bundles finished yet';
