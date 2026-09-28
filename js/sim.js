@@ -368,7 +368,8 @@
       while (need > 1e-9 && q.length) {
         const head = q[0];
         const take = Math.min(need, head.count);
-        cohorts.push({ cohort: head.cohort, count: take, firstTick: head.firstTick });
+        // count: conversions of this cohort not yet worked through; total: in the bundle
+        cohorts.push({ cohort: head.cohort, count: take, total: take, firstTick: head.firstTick });
         head.count -= take; need -= take;
         if (head.count <= 1e-9) q.shift();
       }
@@ -398,10 +399,12 @@
     }
 
     // Put a bundle's unprocessed conversions back at the front of the intake buffer.
+    // The part already worked through counts as processed for its cohorts.
     returnToIntake(b) {
       const back = [];
-      for (let i = b.cursor; i < b.cohorts.length; i++) {
-        const c = b.cohorts[i];
+      for (const c of b.cohorts) {
+        const done = c.total - c.count;
+        if (done > 1e-9) { const stat = this.cohorts.get(c.cohort); if (stat) stat.processed += done; }
         if (c.count > 1e-9) back.push({ cohort: c.cohort, count: c.count, firstTick: c.firstTick });
       }
       if (!back.length) return;
@@ -410,16 +413,24 @@
       this.intake.oldestTick = this.intake.cohorts[0].firstTick;
     }
 
-    // Attribute `amount` processed conversions to the bundle's cohorts, oldest first.
+    // Track how far the worker has got through the bundle's cohorts (oldest
+    // first). This does NOT count as processed for completeness: a bundle is
+    // written out atomically, so its cohorts are credited only when it completes.
     creditProcessed(b, amount) {
       let left = amount;
       while (left > 1e-9 && b.cursor < b.cohorts.length) {
         const c = b.cohorts[b.cursor];
         const take = Math.min(left, c.count);
         c.count -= take; left -= take;
-        const stat = this.cohorts.get(c.cohort);
-        if (stat) stat.processed += take;
         if (c.count <= 1e-9) b.cursor++;
+      }
+    }
+
+    // Bundle written out: every conversion in it is now complete for its cohort.
+    creditCompleted(b) {
+      for (const c of b.cohorts) {
+        const stat = this.cohorts.get(c.cohort);
+        if (stat) stat.processed += c.total;
       }
     }
 
@@ -615,6 +626,7 @@
         if (b.remaining <= 1e-9) {
           w.bundle = null;
           w.completed++;
+          this.creditCompleted(b);
           latencies.push(t - b.createdTick);
           this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, extraTicks: b.extraTicks });
           this.totals.bundlesCompleted++;

@@ -183,14 +183,18 @@ test('per-minute completeness: cohorts conserve counts and age toward 100%', () 
   const arrived = rows.reduce((s, r) => s + r.arrived, 0);
   const processed = rows.reduce((s, r) => s + r.processed, 0);
   assert.ok(Math.abs(arrived - sim.totals.arrived) < 1e-3, `arrived ${arrived} vs ${sim.totals.arrived}`);
-  assert.ok(Math.abs(processed - sim.totals.processed) < 1e-3, `processed ${processed} vs ${sim.totals.processed}`);
-  // the newest minute is barely processed, minutes older than ~2.5 h are done
-  assert.ok(rows[rows.length - 1].pct < 5, `newest ${rows[rows.length - 1].pct}`);
+  // bundles are written atomically: cohorts are credited only for completed
+  // bundles, so cohort-processed = total processed minus work-in-progress
+  const inProgress = sim.workers.reduce((s, w) => s + (w.bundle ? w.bundle.size - w.bundle.remaining : 0), 0);
+  assert.ok(Math.abs(processed - (sim.totals.processed - inProgress)) < 1e-3, `processed ${processed} vs ${sim.totals.processed - inProgress}`);
+  // recent minutes are 0% until their bundle completes (~2 h), older ones are done
+  for (const r of rows.slice(-100)) assert.equal(r.pct, 0, `young cohort ${r.cohort} at ${r.pct}%`);
   for (const r of rows.slice(0, 60)) assert.ok(r.pct > 99.9, `old cohort ${r.cohort} at ${r.pct}%`);
-  // completeness never exceeds 100 and is (weakly) higher for older cohorts in steady state
   for (const r of rows) assert.ok(r.pct <= 100 + 1e-9);
-  const mid = rows.slice(60, 120).map(r => r.pct);
-  assert.ok(mid[0] >= mid[mid.length - 1] - 5, 'older cohorts should be at least as complete');
+  // the step from 0 to 100 happens within a few minutes of the 2 h bundle time
+  const firstIncomplete = rows.findIndex(r => r.pct < 99);
+  const ageMin = rows.length - firstIncomplete;
+  assert.ok(ageMin > 118 && ageMin < 128, `step at ${ageMin} min`);
 });
 
 test('upstream delay keeps held conversions in their original arrival minute', () => {
@@ -206,16 +210,15 @@ test('upstream delay keeps held conversions in their original arrival minute', (
   }
 });
 
-test('fresh time percentiles: ordered, and near the 2 h ramp under healthy load', () => {
+test('fresh time percentiles: ordered, and near the 2 h bundle time under healthy load', () => {
   const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 31 }));
   run(sim, 5 * 360);
   const f = sim.freshTimes();
   const min = t => t / 6;
   assert.ok(f[99] >= f[90] && f[90] >= f[50], `order ${JSON.stringify(f)}`);
-  // completeness of data aged a is ~ a / 2h, so P50 ~ 60 min, P90 ~ 108, P99 ~ 119
-  assert.ok(Math.abs(min(f[50]) - 60) < 8, `p50 ${min(f[50])} min`);
-  assert.ok(Math.abs(min(f[90]) - 108) < 8, `p90 ${min(f[90])} min`);
-  assert.ok(Math.abs(min(f[99]) - 119) < 8, `p99 ${min(f[99])} min`);
+  // bundles are written atomically, so a minute goes from 0% to 100% when its
+  // bundle completes ~2 h later: all three percentiles sit near 2 h
+  for (const L of [50, 90, 99]) assert.ok(Math.abs(min(f[L]) - 121) < 6, `p${L} ${min(f[L])} min`);
   // snapshot carries the same numbers
   assert.equal(sim.last.fresh99, f[99]);
 });

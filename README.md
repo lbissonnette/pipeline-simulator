@@ -30,9 +30,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 - **Completeness by arrival minute** – for each simulated minute on the same
   12-hour horizon as the other charts, the share of conversions that arrived in
   that minute which have been processed so far. Older minutes sit at 100%, the newest near 0%, and the
-  slope between them is the processing front; incidents leave dents that
-  persist until those cohorts catch up. The header shows the most recent
-  minute through which everything is at least 99% complete. Hover for the
+  header shows the most recent minute through which everything is at least
+  99% complete. Hover for the
   minute's arrived and processed counts.
 - **Fresh time** – P50, P90 and P99 over time. A 3-minute window slides over
   the arrival minutes; each window's completeness is processed ÷ arrived across
@@ -117,8 +116,8 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    Under the Healthy preset the median is a little over two hours.
 8. **Arrival cohorts**: every conversion is tagged with the minute it arrived
    in, through the intake buffer (and the upstream-delay hold) into its bundle.
-   As a worker makes progress on a bundle, processed conversions are credited
-   to the bundle's cohorts oldest-minute first. `Simulation#completeness(n)`
+   A bundle is written out atomically, so its cohorts are credited only when
+   the whole bundle completes. `Simulation#completeness(n)`
    returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
    is what the completeness chart plots. `Simulation#freshTimes(levels,
    windowCohorts)` returns the fresh time in ticks per level (default levels
