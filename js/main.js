@@ -60,7 +60,7 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'idle', heterogeneity: 0 };
+  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', heterogeneity: 0 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
     healthy:    Object.assign({}, BASE, { arrivalRate: 8000, dist: NORMAL }),

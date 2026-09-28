@@ -141,7 +141,7 @@
     bundleSize: 7200,          // conversions per bundle
     bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
     dispatcherCapacity: 10,    // bundles the dispatcher can hold
-    routing: 'idle',           // idle | lowestIdle | roundRobin | sticky
+    routing: 'lowestIdle',     // lowestIdle | idle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     heterogeneity: 0,          // sd of per-worker permanent speed multiplier
     historyLength: 4320,       // 12 h
@@ -197,7 +197,11 @@
       const ws = this.workers;
       while (ws.length > n) {
         const w = ws.pop();
-        if (w.bundle) this.dispatcher.unshift(w.bundle); // hand its work back
+        if (!w.bundle) continue;
+        // hand its work back: to the dispatcher if there is room, else to the
+        // front of the intake buffer (keeping the conversions' arrival minutes)
+        if (this.dispatcher.length < this.config.dispatcherCapacity) this.dispatcher.unshift(w.bundle);
+        else this.returnToIntake(w.bundle);
       }
       while (ws.length < n) {
         ws.push({
@@ -244,8 +248,8 @@
     //       'degrade'       magnitude = { factor, fraction, selection }: a
     //                       `fraction` of workers run at `factor` x their rate;
     //                       factor 0 is a full outage (offline, skipped by idle
-    //                       routing). selection 'random' (default) picks them at
-    //                       random, 'lowest' takes the lowest indices.
+    //                       routing). selection 'lowest' (default) takes the
+    //                       lowest indices, 'random' picks them at random.
     //       'upstreamDelay' arrivals are held until the incident ends
     //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
@@ -259,7 +263,7 @@
         const factor = Math.max(0, magnitude.factor);
         const count = Math.round(this.workers.length * Math.min(1, Math.max(0, magnitude.fraction)));
         const ids = this.workers.map(w => w.id);
-        inc.selection = magnitude.selection === 'lowest' ? 'lowest' : 'random';
+        inc.selection = magnitude.selection === 'random' ? 'random' : 'lowest';
         if (inc.selection === 'random') {
           for (let i = ids.length - 1; i > 0; i--) {
             const j = this.rng.int(i + 1);
@@ -379,6 +383,19 @@
       this.totals.bundlesCut++;
       this.events.push({ type: 'bundle', size });
       return b;
+    }
+
+    // Put a bundle's unprocessed conversions back at the front of the intake buffer.
+    returnToIntake(b) {
+      const back = [];
+      for (let i = b.cursor; i < b.cohorts.length; i++) {
+        const c = b.cohorts[i];
+        if (c.count > 1e-9) back.push({ cohort: c.cohort, count: c.count, firstTick: c.firstTick });
+      }
+      if (!back.length) return;
+      this.intake.cohorts = back.concat(this.intake.cohorts);
+      this.intake.items += b.remaining;
+      this.intake.oldestTick = this.intake.cohorts[0].firstTick;
     }
 
     // Attribute `amount` processed conversions to the bundle's cohorts, oldest first.

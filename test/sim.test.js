@@ -243,7 +243,7 @@ test('fresh time is zero when everything is complete', () => {
 test('degrade incident: a share of workers run slower, and factor 0 means offline', () => {
   const sim = new Simulation({ arrivalRate: 8000, seed: 41 });
   run(sim, 1500);
-  const inc = sim.addIncident('degrade', { factor: 0.25, fraction: 0.3 }, 120);
+  const inc = sim.addIncident('degrade', { factor: 0.25, fraction: 0.3, selection: 'random' }, 120);
   assert.equal(inc.workers.length, 300);
   sim.step();
   assert.equal(sim.last.slowed, 300);

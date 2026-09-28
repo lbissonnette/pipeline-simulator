@@ -51,12 +51,12 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 8,000 = 800/s. |
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
-| | Routing | Any idle worker, lowest idle index (first fit), round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
+| | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. |
 | | Worker heterogeneity | Spread of a permanent per-worker speed multiplier. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
-| | Degraded workers | Multiply the rate of a percentage of workers, chosen at random or the lowest by index, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
+| | Degraded workers | Multiply the rate of a percentage of workers, the lowest by index (default) or chosen at random, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,000); can be changed live. |
 | | Bundle size | Conversions per bundle (default 7,200, so a bundle takes ~2 h at 10 per tick). |
