@@ -299,7 +299,8 @@
   const sctx = stage.getContext('2d');
   const tooltip = $('#stage-tooltip');
   let geom = null;
-  let NODE_R = 34;
+  let NODE_R = 42;   // horizontal half-size of a node
+  let NODE_RY = 42;  // vertical half-size (narrow screens use wide pills)
 
   function computeGeometry() {
     const n = sim.workers.length;
@@ -333,7 +334,8 @@
       writer: narrow ? { x: W * 0.7, y: 38 } : { x: W - sideW / 2, y: H * 0.3 },
       sink: narrow ? { x: W * 0.9, y: 38 } : { x: W - sideW / 2, y: H * 0.7 },
     };
-    NODE_R = narrow ? 24 : 42;
+    NODE_R = narrow ? 33 : 42;
+    NODE_RY = narrow ? 20 : 42;
     return geom;
   }
 
@@ -347,7 +349,7 @@
   // pool -> writer arrow (finished bundles), and writer -> Done arrow (written data)
   function poolToWriter(g) {
     const R = NODE_R;
-    if (g.narrow) return { from: { x: g.writer.x, y: g.oy - 6 }, to: { x: g.writer.x, y: g.writer.y + R } };
+    if (g.narrow) return { from: { x: g.writer.x, y: g.oy - 6 }, to: { x: g.writer.x, y: g.writer.y + NODE_RY } };
     const gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
     const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
     return { from: { x: gridRight + 6, y: gridMidY }, to: { x: g.writer.x - R, y: g.writer.y } };
@@ -364,9 +366,10 @@
     // flight time: ~700 ms at 1 min/s, ~450 ms at 10 min/s, 300 ms floor at the fastest speeds
     const dur = Math.max(300, Math.min(700, 1400 / Math.sqrt(Math.max(1, ticksPerSecond / 6))));
     const g = geom, R = NODE_R;
+    const RY = NODE_RY;
     const edge = (node, dir) => ({
       x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0),
-      y: node.y + (dir === 'down' ? R : dir === 'up' ? -R : 0),
+      y: node.y + (dir === 'down' ? RY : dir === 'up' ? -RY : 0),
     });
     const scale = Math.min(1, 60 / Math.max(1, ticksPerSecond)); // 1 at <= 10 min/s, 1/12 at 2 h/s
     const sample = (list, max) => {
@@ -432,18 +435,25 @@
     while (t.length > 2 && ctx.measureText(t).width > maxW) t = t.slice(0, -2).trimEnd() + '…';
     ctx.fillText(t, x, y);
   }
+  function nodePath(ctx, x, y, r, pad) {
+    const rx = r + (pad || 0), ry = NODE_RY + (pad || 0);
+    ctx.beginPath();
+    if (ry >= rx) ctx.arc(x, y, rx, 0, Math.PI * 2);
+    else roundRect(ctx, x - rx, y - ry, 2 * rx, 2 * ry, ry); // wide pill
+  }
   function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    nodePath(ctx, x, y, r);
     ctx.fillStyle = fillColor; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = border; ctx.stroke();
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const maxW = 2 * r - 12;
-    const lineH = r >= 40 ? 13 : 12;
+    const maxW = 2 * r - 10;
+    const lineH = NODE_RY >= 40 ? 13 : 11;
     const titleY = lines.length ? y - (lines.length * lineH) / 2 : y;
+    const small = NODE_RY < 40;
     ctx.fillStyle = ink;
-    fitText(ctx, title, x, titleY, maxW, 12, '600');
+    fitText(ctx, title, x, titleY, maxW, small ? 11 : 12, '600');
     ctx.fillStyle = ink2;
-    lines.forEach((l, i) => fitText(ctx, l, x, titleY + (i + 1) * lineH, maxW, 11));
+    lines.forEach((l, i) => fitText(ctx, l, x, titleY + (i + 1) * lineH, maxW, small ? 10 : 11));
   }
 
   function drawArrow(ctx, x0, y0, x1, y1, color) {
@@ -575,7 +585,7 @@
       [`${fmtInt(snap.dispatcherQueued)} / ${fmtInt(snap.dispatcherCapacity)}`, `${snap.dispatched} sent`],
       full ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
     if (full) {
-      ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
+      nodePath(ctx, g.dispatcher.x, g.dispatcher.y, r, 2);
       ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
     }
     const writerFull = snap.writerQueued >= snap.writerCapacity;
@@ -583,7 +593,7 @@
       [`${fmtInt(snap.writerQueued)} / ${fmtInt(snap.writerCapacity)}`, snap.blocked ? `${fmt(snap.blocked)} blocked` : `${fmt(snap.written)} / tick`],
       writerFull ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
     if (writerFull) {
-      ctx.beginPath(); ctx.arc(g.writer.x, g.writer.y, r + 2, 0, Math.PI * 2);
+      nodePath(ctx, g.writer.x, g.writer.y, r, 2);
       ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
     }
     drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.written)} total`, `${fmt(snap.written)} / tick`],
