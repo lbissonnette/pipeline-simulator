@@ -98,6 +98,7 @@
     }
     partial.dist = dist;
     sim.update(partial);
+    geom = null;
     $('#arrival-rate-s').textContent = fmtInt(partial.arrivalRate / TICK_SECONDS);
     $('#rate-per-s').textContent = (dist.mean / TICK_SECONDS).toFixed(2).replace(/0$/, '');
     $('.bimodal-only').hidden = dist.type !== 'bimodal';
@@ -137,7 +138,7 @@
     else if (type === 'outage') sim.addIncident('outage', num('#outage-mag') / 100, mins('#outage-dur'));
     else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
     renderIncidents();
-    if (!playing) render();
+    if (!playing) render(true);
   }));
 
   const INCIDENT_LABEL = {
@@ -155,7 +156,7 @@
       const left = Math.max(0, inc.end - sim.tick);
       const pct = 100 * (1 - left / inc.duration);
       li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i style="width:${pct}%"></i></span><span>${fmtDur(left)}</span><button title="Cancel" aria-label="Cancel incident">×</button>`;
-      li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(); });
+      li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(true); });
       ul.appendChild(li);
     }
   }
@@ -167,15 +168,17 @@
     playBtn.textContent = p ? '❚❚ Pause' : '▶ Play';
     playBtn.setAttribute('aria-pressed', String(p));
     if (p) { lastFrame = performance.now(); requestAnimationFrame(frame); }
+    else render(true);
   }
   playBtn.addEventListener('click', () => setPlaying(!playing));
-  $('#btn-step').addEventListener('click', () => { doTick(); render(); });
+  $('#btn-step').addEventListener('click', () => { doTick(); render(true); });
   $('#btn-reset').addEventListener('click', () => {
     sim.reset(parseInt($('#seed').value, 10) || 0);
     particles = [];
     for (const c of Object.values(charts)) c.hoverIndex = null;
+    resetRows();
     renderIncidents();
-    render();
+    render(true);
   });
   function speedLabel(tps) {
     const minPerSec = tps / TICKS_PER_MIN;
@@ -188,7 +191,7 @@
   document.addEventListener('keydown', e => {
     if (e.target.matches('input, select, textarea')) return;
     if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
-    if (e.key === 's' || e.key === 'ArrowRight') { doTick(); render(); }
+    if (e.key === 's' || e.key === 'ArrowRight') { doTick(); render(true); }
   });
 
   // ---------- distribution preview ----------
@@ -272,7 +275,7 @@
     accumulator -= n;
     if (n > 400) { n = 400; accumulator = 0; }
     for (let i = 0; i < n; i++) doTick();
-    render();
+    render(false);
     requestAnimationFrame(frame);
   }
 
@@ -286,11 +289,12 @@
   function computeGeometry() {
     const n = sim.workers.length;
     const rect0 = stage.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    if (geom && geom.n === n && geom.W === rect0.width && geom.H === rect0.height && geom.dpr === dpr) return geom;
     const narrow = rect0.width < 640;
     // taller stage for big pools so cells stay legible
     const wantH = narrow ? (n > 400 ? 520 : 420) : (n > 400 ? 640 : 460);
     if (Math.round(rect0.height) !== wantH) stage.style.height = wantH + 'px';
-    const dpr = window.devicePixelRatio || 1;
     const rect = stage.getBoundingClientRect();
     const W = rect.width, H = rect.height;
     if (stage.width !== Math.round(W * dpr) || stage.height !== Math.round(H * dpr)) {
@@ -307,7 +311,7 @@
     const usedW = cols * cell + (cols - 1) * gap, usedH = rows * cell + (rows - 1) * gap;
     const ox = gridX + (gridW - usedW) / 2, oy = gridY + (gridH - usedH) / 2;
     geom = {
-      dpr, W, H, cols, rows, cell, gap, ox, oy, narrow, sideW,
+      n, dpr, W, H, cols, rows, cell, gap, ox, oy, narrow, sideW,
       source: narrow ? { x: W * 0.14, y: 38 } : { x: sideW / 2, y: H * 0.15 },
       bundler: narrow ? { x: W * 0.38, y: 38 } : { x: sideW / 2, y: H * 0.5 },
       dispatcher: narrow ? { x: W * 0.62, y: 38 } : { x: sideW / 2, y: H * 0.85 },
@@ -326,7 +330,8 @@
   function spawnParticles(events, snap) {
     if (!geom) return;
     const now = performance.now();
-    const dur = Math.max(160, Math.min(600, 900 / Math.max(1, ticksPerSecond / 6)));
+    // flight time: ~700 ms at 1 min/s, ~450 ms at 10 min/s, 300 ms floor at the fastest speeds
+    const dur = Math.max(300, Math.min(700, 1400 / Math.sqrt(Math.max(1, ticksPerSecond / 6))));
     const g = geom, R = NODE_R;
     const edge = (node, dir) => ({
       x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0),
@@ -368,8 +373,23 @@
     if (particles.length > 600) particles.splice(0, particles.length - 600);
   }
 
+  let theme = null;      // cached colours; rebuilt on theme change
+  let hatch = null;      // cached CanvasPattern for offline cells
   function buildRamp() {
     ramp = cssVar('--ramp').split(',').map(s => s.trim());
+    theme = {
+      surface: cssVar('--surface'), surface2: cssVar('--surface-2'), border: cssVar('--border'),
+      ink: cssVar('--text'), ink2: cssVar('--text-2'), axis: cssVar('--axis'), critical: cssVar('--critical'),
+      idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
+      s1: cssVar('--s1'), s2: cssVar('--s2'),
+    };
+    const pc = document.createElement('canvas');
+    pc.width = 8; pc.height = 8;
+    const px = pc.getContext('2d');
+    px.fillStyle = theme.offline; px.fillRect(0, 0, 8, 8);
+    px.strokeStyle = theme.offlineInk; px.lineWidth = 1.2;
+    px.beginPath(); px.moveTo(-2, 6); px.lineTo(6, -2); px.moveTo(2, 10); px.lineTo(10, 2); px.stroke();
+    hatch = sctx.createPattern(pc, 'repeat');
   }
 
   function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
@@ -400,13 +420,7 @@
     ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
     ctx.clearRect(0, 0, g.W, g.H);
     const snap = sim.last;
-    // resolve theme colours once per frame (getComputedStyle is slow per cell)
-    const C = {
-      surface: cssVar('--surface'), surface2: cssVar('--surface-2'), border: cssVar('--border'),
-      ink: cssVar('--text'), ink2: cssVar('--text-2'), axis: cssVar('--axis'), critical: cssVar('--critical'),
-      idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
-      s1: cssVar('--s1'), s2: cssVar('--s2'),
-    };
+    const C = theme;
 
     const gridLeft = g.ox, gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
     const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
@@ -458,17 +472,9 @@
         const ratio = Math.min(1, (tick - w.bundle.dispatchedTick) / ageScale);
         fill = ramp[Math.round(ratio * (ramp.length - 1))];
       }
-      ctx.fillStyle = fill;
+      ctx.fillStyle = offline && cell >= 6 && hatch ? hatch : fill;
       if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
       else ctx.fillRect(x, y, cell, cell);
-      if (offline && cell >= 6) {
-        ctx.save(); ctx.beginPath(); ctx.rect(x, y, cell, cell); ctx.clip();
-        ctx.strokeStyle = C.offlineInk; ctx.lineWidth = 1;
-        for (let d = -cell; d < cell * 2; d += 4) {
-          ctx.beginPath(); ctx.moveTo(x + d, y + cell); ctx.lineTo(x + d + cell, y); ctx.stroke();
-        }
-        ctx.restore();
-      }
       if (w.bundle && showBar) {
         const b = w.bundle;
         const p = 1 - b.remaining / b.size;
@@ -500,7 +506,9 @@
     particles = alive;
   }
 
+  const nativeRoundRect = typeof CanvasRenderingContext2D !== 'undefined' && 'roundRect' in CanvasRenderingContext2D.prototype;
   function roundRect(ctx, x, y, w, h, r) {
+    if (nativeRoundRect) { ctx.roundRect(x, y, w, h, r); return; }
     ctx.moveTo(x + r, y);
     ctx.arcTo(x + w, y, x + w, y + h, r);
     ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -584,35 +592,50 @@
   }
 
   // Chart rows: 5-minute moving averages for the noisy per-tick series and a
-  // 30-minute rolling window for latency percentiles (few bundles finish per tick).
+  // 30-minute rolling window for latency percentiles (few bundles finish per
+  // tick). Built incrementally: only ticks appended since the last call are
+  // processed, and rows that fell out of the history window are dropped.
   const AVG_WIN = 5 * TICKS_PER_MIN, LAT_WIN = 30 * TICKS_PER_MIN;
+  const rowState = { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p95: null };
+  function resetRows() {
+    Object.assign(rowState, { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p95: null });
+  }
   function chartRows(history) {
-    const out = new Array(history.length);
-    let sa = 0, sp = 0; const q = [];
-    const latQ = []; let latCount = 0;
-    for (let i = 0; i < history.length; i++) {
+    const st = rowState;
+    if (!history.length) { resetRows(); return st.rows; }
+    if (history[history.length - 1].tick < st.lastTick) resetRows(); // sim was reset
+    // drop rows older than the history window
+    const firstTick = history[0].tick;
+    let drop = 0;
+    while (drop < st.rows.length && st.rows[drop].tick < firstTick) drop++;
+    if (drop) st.rows.splice(0, drop);
+    // append new ticks
+    let start = history.length - (history[history.length - 1].tick - st.lastTick);
+    if (start < 0) start = 0;
+    for (let i = start; i < history.length; i++) {
       const h = history[i];
-      q.push(h); sa += h.arrivals; sp += h.processed;
-      if (q.length > AVG_WIN) { const d = q.shift(); sa -= d.arrivals; sp -= d.processed; }
-      latQ.push(h.latencies); latCount += h.latencies.length;
-      if (latQ.length > LAT_WIN) latCount -= latQ.shift().length;
-      let p50 = null, p95 = null;
-      if (latCount >= 5 && (i % 3 === 0 || i === history.length - 1)) {
+      if (h.tick <= st.lastTick) continue;
+      st.q.push(h); st.sa += h.arrivals; st.sp += h.processed;
+      if (st.q.length > AVG_WIN) { const d = st.q.shift(); st.sa -= d.arrivals; st.sp -= d.processed; }
+      st.latQ.push(h.latencies); st.latCount += h.latencies.length;
+      if (st.latQ.length > LAT_WIN) st.latCount -= st.latQ.shift().length;
+      if (st.latCount >= 5 && h.tick % 3 === 0) {
         const all = [];
-        for (const arr of latQ) for (const v of arr) all.push(v);
+        for (const arr of st.latQ) for (const v of arr) all.push(v);
         all.sort((a, b) => a - b);
-        p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_MIN;
-        p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_MIN;
-      } else if (i > 0 && latCount >= 5) {
-        p50 = out[i - 1].latP50Min; p95 = out[i - 1].latP95Min;
-      }
-      out[i] = Object.assign({}, h, {
-        arrivals: sa / q.length, processed: sp / q.length, utilPct: h.utilization * 100,
-        latP50Min: p50, latP95Min: p95,
+        st.p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_MIN;
+        st.p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_MIN;
+      } else if (st.latCount < 5) { st.p50 = null; st.p95 = null; }
+      st.rows.push({
+        tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
+        dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
+        arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
+        latP50Min: st.p50, latP95Min: st.p95,
         fresh50Min: h.fresh50 / TICKS_PER_MIN, fresh90Min: h.fresh90 / TICKS_PER_MIN, fresh99Min: h.fresh99 / TICKS_PER_MIN,
       });
+      st.lastTick = h.tick;
     }
-    return out;
+    return st.rows;
   }
 
   // ---------- KPIs ----------
@@ -652,8 +675,18 @@
   }
 
   // ---------- render ----------
-  function render() {
+  // The stage animates every frame; charts and KPIs refresh a few times a
+  // second (or immediately when paused, stepping, or resizing).
+  const DASHBOARD_INTERVAL_MS = 250;
+  let lastDashboard = 0;
+  function render(force) {
     drawStage();
+    const now = performance.now();
+    if (!force && playing && now - lastDashboard < DASHBOARD_INTERVAL_MS) return;
+    lastDashboard = now;
+    renderDashboard();
+  }
+  function renderDashboard() {
     const rows = chartRows(sim.history);
     updateKpis(rows);
     for (const [name, c] of Object.entries(charts)) { if (name !== 'completeness') { c.setData(rows); c.draw(); } }
@@ -671,9 +704,9 @@
     $('#fresh-note').textContent = `now: P50 ${fmtDur(f.fresh50)} · P90 ${fmtDur(f.fresh90)} · P99 ${fmtDur(f.fresh99)} · 3-min windows`;
   }
 
-  window.addEventListener('resize', () => { drawDistribution(); render(); });
+  window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });
   if (window.matchMedia) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { buildRamp(); drawDistribution(); render(); });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { buildRamp(); drawDistribution(); render(true); });
   }
 
   // ---------- boot ----------
@@ -681,6 +714,6 @@
   readControlsIntoSim();
   $('.chip[data-preset="healthy"]').classList.add('active');
   $('#speed-out').textContent = speedLabel(ticksPerSecond);
-  render();
+  render(true);
   setPlaying(true);
 })();
