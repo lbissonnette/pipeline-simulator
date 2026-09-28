@@ -62,15 +62,17 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 60 };
+  // 1,200-conversion bundles (20 min of work) plus ~1.6 expensive conversions at
+  // 9 ± 25 min each: end-to-end median ~25 min, p99 ~2.5 h, capacity ~5,800/tick.
+  const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.001333, expensiveCost: 54, expensiveCostSd: 150 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
-    healthy:    Object.assign({}, BASE, { arrivalRate: 7000, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 11000, dist: NORMAL }),
-    // ~3.8 expensive conversions per bundle at 32 ± 19 min each: +2 h mean, 1.2 h sd
-    expensive:  Object.assign({}, BASE, { arrivalRate: 4000, expensiveFraction: 0.000525, expensiveCost: 192, expensiveCostSd: 114, dist: NORMAL }),
-    sticky:     Object.assign({}, BASE, { arrivalRate: 7000, routing: 'sticky', dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 7000, waveAmplitude: 0.6, dist: NORMAL }),
+    healthy:    Object.assign({}, BASE, { arrivalRate: 4650, dist: NORMAL }),
+    overloaded: Object.assign({}, BASE, { arrivalRate: 7000, dist: NORMAL }),
+    // no expensive conversions: every bundle takes ~20 min; capacity ~10,000/tick
+    clean:      Object.assign({}, BASE, { arrivalRate: 8000, expensiveFraction: 0, dist: NORMAL }),
+    sticky:     Object.assign({}, BASE, { arrivalRate: 4650, routing: 'sticky', dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 4650, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------
@@ -683,13 +685,18 @@
   const histWindows = HIST_WINDOWS.map(w => Object.assign({}, w, { win: new LatencyWindow(w.ticks) }));
 
   function renderHistogram() {
-    let maxMinute = 0;
-    for (const w of histWindows) { w.win.update(); if (w.win.total > 0 && w.win.maxMinute > maxMinute) maxMinute = w.win.maxMinute; }
-    const maxMin = Math.max(30, maxMinute + 1);
+    // size bins from the 99.5th percentile so a rare very long bundle does not
+    // squash the bulk; everything beyond lands in a final overflow bin
+    let span = 0;
+    for (const w of histWindows) {
+      w.win.update();
+      if (w.win.total > 0) { const p = w.win.percentile(0.995) / TICKS_PER_MIN; if (p > span) span = p; }
+    }
+    const maxMin = Math.max(30, span + 1);
     let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
     for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
     const nBins = Math.ceil(maxMin / binMin) + 1;
-    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin }));
+    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin, overflow: i === nBins - 1 }));
     const series = histWindows.map(w => {
       const counts = w.win.binned(binMin, nBins), total = w.win.total;
       return { name: w.name, color: w.color, counts, values: counts.map(v => total > 0 ? Math.max(0, (100 * v) / total) : 0) };

@@ -291,7 +291,7 @@
       this.hoverIndex = idx;
       this.draw();
       const b = bins[idx];
-      let html = `<div class="tt-title">${this.xLabel(b.x0)} – ${this.xLabel(b.x1)}</div>`;
+      let html = `<div class="tt-title">${b.overflow ? this.xLabel(b.x0) + ' and above' : this.xLabel(b.x0) + ' – ' + this.xLabel(b.x1)}</div>`;
       for (const s of series) {
         const v = s.values[idx], c = s.counts ? s.counts[idx] : null;
         html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${v.toFixed(1)}%${c !== null ? ` · ${fmt(c)} ${this.countLabel}` : ''}</b></div>`;

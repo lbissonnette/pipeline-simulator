@@ -139,24 +139,26 @@
 
   // ---------- defaults ----------
   // Defaults assume a tick of 10 seconds: a worker does 10 conversions per
-  // tick (1/s), a bundle of 7,200 takes ~720 ticks (2 hours) plus ~14 min of
-  // expensive-conversion stalls, and 1,000 identical workers give ~8,900
-  // conversions per tick of capacity. Workers are homogeneous by design.
+  // tick (1/s), so a bundle of 1,200 takes ~120 ticks (20 min) of work plus
+  // expensive-conversion stalls (1.6 per bundle on average, 9 ± 25 min each,
+  // capped at 4 h), for an end-to-end median of ~25 min with a long tail
+  // (p99 ~2.5 h). 1,000 identical workers give ~5,800 conversions per tick.
   const DEFAULTS = {
     workers: 1000,
-    arrivalRate: 7000,         // mean conversions per tick (Poisson)
+    arrivalRate: 4650,         // mean conversions per tick (Poisson), rho ~0.8
     waveAmplitude: 0,          // 0..1 modulation of arrivals
     wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
-    bundleSize: 7200,          // conversions per bundle
+    bundleSize: 1200,          // conversions per bundle (20 min at 10/tick)
     bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
     dispatcherCapacity: 10,    // bundles the dispatcher can hold
     routing: 'lowestIdle',     // lowestIdle | idle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     // Expensive conversions: a small share of conversions each cost a fixed
     // extra processing time. A bundle holding k of them stalls k x cost ticks.
-    expensiveFraction: 0.0001, // share of conversions that are expensive (0.01%)
-    expensiveCost: 120,        // mean extra ticks per expensive conversion (20 min)
-    expensiveCostSd: 60,       // sd of that cost (log-normal), 10 min
+    expensiveFraction: 0.001333, // share of conversions that are expensive (0.133%, ~1.6 per bundle)
+    expensiveCost: 54,         // mean extra ticks per expensive conversion (9 min)
+    expensiveCostSd: 150,      // sd of that cost (log-normal), 25 min: the long tail
+    expensiveCostCap: 1440,    // no single stall longer than this (4 h), like a timeout
     historyLength: 4320,       // 12 h
     completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
     seed: 42,
@@ -378,7 +380,7 @@
       const k = cfg.expensiveFraction > 0 ? Math.min(Math.round(size), this.rng.poisson(size * cfg.expensiveFraction)) : 0;
       const stalls = [];
       for (let i = 0; i < k; i++) {
-        stalls.push({ at: this.rng.uniform() * size, cost: sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd) });
+        stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd)) });
       }
       stalls.sort((x, y) => x.at - y.at);
       const b = {
@@ -649,6 +651,7 @@
     // mean stall time from expensive conversions.
     expectedBundleTicks() {
       const cfg = this.config;
+      // the cap trims a little off the mean cost; ignored here (well under 1% for the defaults)
       return expectedBundleTicksCached(cfg.dist, cfg.bundleSize) + cfg.bundleSize * cfg.expensiveFraction * cfg.expensiveCost;
     }
 

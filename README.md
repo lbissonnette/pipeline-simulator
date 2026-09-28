@@ -5,8 +5,8 @@ Conversions (sign-ups, purchases after an ad) arrive at a configurable rate, are
 cut into bundles, queue at a bounded dispatcher, and are handed one at a time to
 a pool of 1,000 identical workers. Each tick (10 seconds) every busy worker
 completes a random number of conversions, drawn from a distribution you
-control, and a small share of expensive conversions add fixed stalls; with the
-defaults a bundle takes a little over two hours. Turn the knobs, inject delays, and
+control, and a small share of expensive conversions add stalls; with the
+defaults a bundle takes a median of 25 minutes end to end with a long tail. Turn the knobs, inject delays, and
 watch backlogs form and clear.
 
 Live: <https://lbissonnette.github.io/pipeline-simulator/>
@@ -54,24 +54,24 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 
 | Group | Control | Effect |
 |---|---|---|
-| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 8,000 = 800/s. |
+| Incoming load | Arrival rate | Mean conversions per tick (Poisson). Default 4,650 = 465/s. |
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 10). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
-| | Expensive conversions | Share of conversions that are expensive (default 0.01%), and the mean and spread of each one's extra cost (default 20 ± 10 min, log-normal). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
+| | Expensive conversions | Share of conversions that are expensive (default 0.133%, about 1.6 per bundle), and the mean and spread of each one's extra cost (default 9 ± 25 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
 | | Degraded workers | Multiply the rate of a percentage of workers, the lowest by index (default) or chosen at random, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,000); can be changed live. |
-| | Bundle size | Conversions per bundle (default 7,200, so a bundle takes ~2 h at 10 per tick). |
+| | Bundle size | Conversions per bundle (default 1,200, so the work itself takes ~20 min at 10 per tick). |
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
 
-Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **Expensive tail**
-(0.053% of conversions cost 32 ± 19 min: end-to-end mean 4 h, sd 1.2 h),
-**Sticky partitions** and **Bursty traffic**. The speed control runs from 1 simulated minute per real
+Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **No expensive
+tail** (every bundle takes ~20 min), **Sticky partitions** and **Bursty
+traffic**. The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
 tick.
 
@@ -94,26 +94,26 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    (conversions per tick) from the distribution, multiplies by any degradation,
    and completes `r` conversions of its bundle. Workers are identical. When the
    bundle is done the worker picks up the next bundle on the following tick.
-   With 10 per tick and 7,200 per bundle, the rate-driven part of a bundle
-   takes ~720 ticks = 2 hours. Per-tick noise averages out over a bundle
-   (±1 minute), so it does not spread end-to-end times.
+   With 10 per tick and 1,200 per bundle, the rate-driven part of a bundle
+   takes ~120 ticks = 20 minutes. Per-tick noise averages out over a bundle,
+   so it does not spread end-to-end times.
 5. **Expensive conversions**: each conversion is independently expensive with
    probability `share`, so a bundle holds Poisson(B × share) of them at random
    positions. Each draws its own cost from a log-normal with the configured
    mean and spread; reaching one stalls the worker for that long. Extra time
    per bundle is a compound Poisson sum with mean B × share × cost and
-   sd √(B × share × (cost² + spread²)): the default 0.01% at 20 ± 10 min
-   adds ~14 ± 19 min; 0.053% at 32 ± 19 min gives an end-to-end mean of
-   4 h with sd 1.2 h and a smooth, right-skewed histogram.
+   sd √(B × share × (cost² + spread²)); no single stall exceeds 4 h. The
+   defaults (0.133%, 9 ± 25 min, about 1.6 per bundle) add 14 ± 34 min on top
+   of the 20-minute base, giving an end-to-end median of ~25 min, p90 ~55 min,
+   p99 ~2.5 h.
 6. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
    expected ticks are the rate-driven part (estimated by simulation) plus the
-   mean stall time. With the defaults that is ~8,900 conversions per tick. The load ratio
+   mean stall time. With the defaults that is ~5,800 conversions per tick. The load ratio
    ρ = arrivals ÷ capacity is shown live; above 1 the dispatcher pins at its
    capacity and the backlog grows without bound at the bundler.
 7. **Latency** of a bundle is measured from the tick its oldest conversion
    arrived to the tick it finished, so it includes time spent filling the
    bundle, waiting at the bundler and in the dispatcher, and being processed.
-   Under the Healthy preset the median is a little over two hours.
 8. **Arrival cohorts**: every conversion is tagged with the minute it arrived
    in, through the intake buffer (and the upstream-delay hold) into its bundle.
    A bundle is written out atomically, so its cohorts are credited only when

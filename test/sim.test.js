@@ -2,11 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = require('../js/sim.js');
 
-// Defaults: 1000 workers x 10 conversions/tick, 7,200-conversion bundles
-// (~720 ticks + ~86 ticks of expensive-conversion stalls) -> capacity ~8,900/tick.
-// Tests that check exact shapes disable expensive conversions (PURE).
-const CAP = 8918;
-const PURE = { expensiveFraction: 0 };
+// Defaults: 1000 workers x 10 conversions/tick, 1,200-conversion bundles
+// (~120 ticks of work + ~86 ticks of expensive-conversion stalls) -> capacity
+// ~5,800/tick, end-to-end median ~25 min with a long tail.
+// Tests that check exact shapes use a reference model: 7,200-conversion
+// bundles (~2 h) with no expensive conversions (PURE), or with a fixed small
+// share (REF) where the stalls themselves are under test.
+const CAP = 5814;
+const PURE = { expensiveFraction: 0, bundleSize: 7200 };
+const REF = { bundleSize: 7200, expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 60 };
 function run(sim, ticks) { for (let i = 0; i < ticks; i++) sim.step(); return sim.last; }
 function invariants(sim) {
   assert.ok(sim.dispatcher.length <= sim.config.dispatcherCapacity, 'dispatcher over capacity');
@@ -18,7 +22,7 @@ test('defaults describe the intended scale', () => {
   const sim = new Simulation();
   assert.equal(sim.workers.length, 1000);
   assert.ok(Math.abs(sim.last.nominalCapacity - CAP) < CAP * 0.02, `capacity ${sim.last.nominalCapacity}`);
-  assert.ok(Math.abs(sim.last.load - 0.785) < 0.02, `load ${sim.last.load}`);
+  assert.ok(Math.abs(sim.last.load - 0.8) < 0.02, `load ${sim.last.load}`);
 });
 
 test('a bundle takes about bundleSize / mean ticks, plus the wasted tail', () => {
@@ -279,7 +283,7 @@ test('degrade incident: a share of workers run slower, and factor 0 means offlin
 });
 
 test('lowest-idle routing concentrates work on low-index workers', () => {
-  const sim = new Simulation({ arrivalRate: 7000, seed: 51, routing: 'lowestIdle' });
+  const sim = new Simulation({ arrivalRate: 4200, seed: 51, routing: 'lowestIdle' });
   run(sim, 3000);
   const busy = sim.workers.filter(w => w.bundle).map(w => w.id);
   const idle = sim.workers.filter(w => !w.bundle).map(w => w.id);
@@ -303,7 +307,7 @@ test('degrade can target the lowest x% of workers by index', () => {
 });
 
 test('completions are retained for the window and can be sliced by recency', () => {
-  const sim = new Simulation({ arrivalRate: 8000, seed: 61, completionRetention: 3000, expensiveFraction: 0 });
+  const sim = new Simulation(Object.assign({}, PURE, { arrivalRate: 8000, seed: 61, completionRetention: 3000 }));
   run(sim, 5000);
   const all = sim.latencySamples(1e9);
   assert.ok(all.length > 0);
@@ -319,7 +323,7 @@ test('completions are retained for the window and can be sliced by recency', () 
 
 
 test('expensive conversions: each one adds exactly its cost to the bundle', () => {
-  const sim = new Simulation({ arrivalRate: 7000, seed: 71, expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 0 });
+  const sim = new Simulation(Object.assign({}, REF, { arrivalRate: 7000, seed: 71, expensiveCostSd: 0 }));
   run(sim, 4000);
   const byK = new Map();
   for (const c of sim.latencySamples(2000)) {
@@ -339,18 +343,18 @@ test('expensive conversions: each one adds exactly its cost to the bundle', () =
   invariants(sim);
 });
 
-test('expensive-tail preset: end-to-end mean ~4 h, sd ~1.2 h', () => {
-  const sim = new Simulation({ arrivalRate: 4000, seed: 72, expensiveFraction: 0.000525, expensiveCost: 192, expensiveCostSd: 114 });
-  run(sim, 12000);
-  const c = sim.latencySamples(6000);
-  let w = 0, m = 0;
-  for (const x of c) { w += x.size; m += x.latency * x.size; }
-  m /= w;
-  let v = 0;
-  for (const x of c) v += x.size * (x.latency - m) ** 2;
-  const sd = Math.sqrt(v / w);
-  assert.ok(Math.abs(m / 360 - 4) < 0.15, `mean ${m / 360} h`);
-  assert.ok(Math.abs(sd / 360 - 1.2) < 0.15, `sd ${sd / 360} h`);
+test('default distribution: end-to-end median ~25 min with a long tail', () => {
+  const sim = new Simulation({ seed: 72 });
+  run(sim, 6000);
+  const c = sim.latencySamples(3000).slice().sort((a, b) => a.latency - b.latency);
+  const total = c.reduce((s, x) => s + x.size, 0);
+  const q = p => { let acc = 0; for (const x of c) { acc += x.size; if (acc >= p * total) return x.latency / 6; } return null; };
+  assert.ok(c.length > 5000, `completions ${c.length}`);
+  assert.ok(Math.abs(q(0.5) - 25) < 2.5, `median ${q(0.5)} min`);
+  assert.ok(q(0.9) > 45 && q(0.9) < 70, `p90 ${q(0.9)} min`);
+  assert.ok(q(0.99) > 110 && q(0.99) < 220, `p99 ${q(0.99)} min`);
+  // no single stall beyond the 4 h cap
+  for (const x of c) assert.ok(x.latency < 1440 * 4 + 200);
   assert.ok(sim.last.load > 0.75 && sim.last.load < 0.85, `load ${sim.last.load}`);
 });
 
@@ -371,7 +375,7 @@ test('expensive cost spread: per-conversion costs vary log-normally around the m
   assert.ok(Math.abs(sd - 60) < 3, `sd ${sd}`);
   assert.equal(sampleLognormal(rng, 120, 0), 120);
   // in the simulation, the recorded extra time equals the sum of the drawn costs
-  const sim = new Simulation({ arrivalRate: 7000, seed: 73 });
+  const sim = new Simulation(Object.assign({}, REF, { arrivalRate: 7000, seed: 73 }));
   run(sim, 3000);
   const c = sim.latencySamples(1000).filter(x => x.expensive === 1);
   assert.ok(c.length > 100);
