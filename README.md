@@ -86,3 +86,7 @@ npm start       # serve locally
 A GitHub Pages workflow (`.github/workflows/pages.yml`) publishes the site from
 the default branch once Pages is enabled for the repository with "GitHub
 Actions" as the source.
+
+## License
+
+[MIT](LICENSE). Use it for anything; keep the copyright notice.
