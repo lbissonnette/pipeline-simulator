@@ -324,6 +324,7 @@
       <summary>How the model works</summary>
       <ul>
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
+        <li><b>Layout</b>: every chart card has a Hide button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The arrangement is remembered in this browser.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
         <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment. <i>Lowest idle index</i> is first-fit: work concentrates on the lowest-numbered workers and the highest-numbered ones stay idle while there is spare capacity.</li>

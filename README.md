@@ -54,6 +54,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   of bundles at write-out, over a rolling one-hour window of completions.
 - **Charts** – the last 12 simulated hours of backlog, arrivals vs throughput
   vs capacity, dispatcher queue depth, and busy share. Hover for exact values.
+- **Layout** – each chart card has a Hide button (collapses to its title) and a
+  grip to drag it up or down; the arrangement is remembered per browser.
 
 ## Knobs
 

@@ -164,6 +164,16 @@ button, input, select { font: inherit; color: inherit; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 10px; min-width: 0; }
 .card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin-bottom: 6px; }
+/* card controls: drag grip + hide/show */
+.card-head .card-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; order: 9; }
+.card-head .grip { cursor: grab; color: var(--text-muted); font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; user-select: none; touch-action: none; }
+.card-head .grip:hover { background: var(--surface-2); color: var(--text); }
+.card-head .btn.tiny { padding: 2px 8px; font-size: 12px; line-height: 1.4; }
+.card.collapsed .chart-wrap, .card.collapsed .legend, .card.collapsed .unit, .card.collapsed .stage-wrap { display: none; }
+.card.collapsed { padding-bottom: 8px; }
+.card.collapsed .card-head { margin-bottom: 0; }
+.card.dragging { opacity: 0.55; outline: 2px dashed var(--accent); }
+body.reordering { cursor: grabbing; user-select: none; }
 .card-head .unit { color: var(--text-muted); font-size: 12px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); }
 .lg-item { display: inline-flex; align-items: center; gap: 6px; }

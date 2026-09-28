@@ -722,7 +722,11 @@
   }
   const histWindows = HIST_WINDOWS.map(w => Object.assign({}, w, { win: new LatencyWindow(w.ticks) }));
 
-  function renderHistogram() {
+  // Keep the histogram's data current whether or not it is drawn: the rolling
+  // windows and the axis ratchet advance every frame, so a hidden chart shows
+  // the full picture the moment it is shown again.
+  let latencyRangeMin = 30;
+  function updateHistogramData() {
     // size bins from the 99.5th percentile so a rare very long bundle does not
     // squash the bulk; everything beyond lands in a final overflow bin
     let span = 0;
@@ -730,7 +734,10 @@
       w.win.update();
       if (w.win.total > 0) { const p = w.win.percentile(0.995) / TICKS_PER_MIN; if (p > span) span = p; }
     }
-    const { binMin, nBins, bins } = binPlan(latencyRange.push(sim.tick, span));
+    latencyRangeMin = latencyRange.push(sim.tick, span);
+  }
+  function renderHistogram() {
+    const { binMin, nBins, bins } = binPlan(latencyRangeMin);
     const series = histWindows.map(w => {
       const counts = w.win.binned(binMin, nBins), total = w.win.total;
       return { name: w.name, color: w.color, counts, values: counts.map(v => total > 0 ? Math.max(0, (100 * v) / total) : 0) };
@@ -744,15 +751,17 @@
     xTicks: (x0, x1) => timeTicks(x0 * TICKS_PER_MIN, x1 * TICKS_PER_MIN).map(t => ({ value: t.value / TICKS_PER_MIN, label: t.label })),
     countLabel: 'conversions',
   });
-  let inflightTotal = 0;
-  function renderInflightHistogram() {
-    const rows = sim.inflightByAge(); // ascending age, ticks
-    const total = rows.reduce((s, r) => s + r.count, 0);
-    inflightTotal = total;
-    // range from the 99.5th percentile of age, overflow bin beyond
+  let inflightTotal = 0, inflightRangeMin = 30, inflightRows = [];
+  function updateInflightData() {
+    inflightRows = sim.inflightByAge(); // ascending age, ticks
+    inflightTotal = inflightRows.reduce((s, r) => s + r.count, 0);
     let span = 0, acc = 0;
-    for (const r of rows) { acc += r.count; if (acc >= 0.995 * total) { span = r.age / TICKS_PER_MIN; break; } }
-    const { binMin, nBins, bins } = binPlan(inflightRange.push(sim.tick, span));
+    for (const r of inflightRows) { acc += r.count; if (acc >= 0.995 * inflightTotal) { span = r.age / TICKS_PER_MIN; break; } }
+    inflightRangeMin = inflightRange.push(sim.tick, span);
+  }
+  function renderInflightHistogram() {
+    const rows = inflightRows, total = inflightTotal;
+    const { binMin, nBins, bins } = binPlan(inflightRangeMin);
     const counts = new Array(nBins).fill(0);
     for (const r of rows) counts[Math.min(nBins - 1, Math.floor(r.age / TICKS_PER_MIN / binMin))] += r.count;
     inflightHist.setData({ bins, series: [{ name: 'in flight', color: '--s1', counts, values: counts.map(v => total > 0 ? (100 * v) / total : 0) }] });
@@ -894,7 +903,7 @@
   function render(force) {
     const now = performance.now();
     if (playing && !force) tuneStride(now);
-    drawStage();
+    if (!collapsedFor(stage)) drawStage();
     const rows = chartRows(sim.history);
     // completeness: same horizon as the other charts
     const firstTick = sim.history.length ? sim.history[0].tick : sim.tick;
@@ -905,12 +914,14 @@
     const slot = frameNo % chartStride;
     let i = 0;
     for (const [name, c] of Object.entries(charts)) {
-      const mine = drawAll || (i++ % chartStride) === slot;
+      const mine = (drawAll || (i++ % chartStride) === slot) && !collapsedFor(c.canvas);
       if (name === 'completeness') { c.setData(cohorts); c.setDomain(firstTick, sim.tick); if (mine) c.draw(); }
       else { c.setData(rows); if (mine) c.draw(); }
     }
-    if (drawAll || (i++ % chartStride) === slot) renderHistogram();
-    if (drawAll || (i++ % chartStride) === slot) renderInflightHistogram();
+    updateHistogramData();
+    updateInflightData();
+    if ((drawAll || (i++ % chartStride) === slot) && !collapsedFor(histChart.canvas)) renderHistogram();
+    if ((drawAll || (i++ % chartStride) === slot) && !collapsedFor(inflightHist.canvas)) renderInflightHistogram();
     // incident countdowns: once a second, or at once when the set changes
     if (force || now - lastIncidents >= 1000 || sim.incidents.length !== incidentRows.size) { lastIncidents = now; renderIncidents(); }
     if (!force && playing && now - lastText < TEXT_INTERVAL_MS) return;
@@ -936,7 +947,112 @@
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { window.invalidateChartTheme(); buildRamp(); drawDistribution(); render(true); });
   }
 
+  // ---------- card controls: hide/show and drag to reorder ----------
+  // Every chart card gets a grip and a Hide button in its header. Collapsed
+  // cards keep only their title, and their charts are skipped by the render
+  // loop. Order and hidden state persist per browser in localStorage.
+  const STORE_ORDER = 'pipeline-sim.card-order', STORE_HIDDEN = 'pipeline-sim.card-hidden';
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
+  };
+  const chartGrid = $('.charts');
+  function cardId(card) {
+    const cv = card.querySelector('canvas');
+    return card.dataset.card || (cv ? cv.id : null);
+  }
+  function collapsedFor(canvas) {
+    const card = canvas.closest('.card');
+    return !!(card && card.classList.contains('collapsed'));
+  }
+  function setCollapsed(card, on) {
+    card.classList.toggle('collapsed', on);
+    const btn = card.querySelector('.btn.toggle');
+    if (btn) { btn.textContent = on ? 'Show' : 'Hide'; btn.setAttribute('aria-expanded', String(!on)); }
+    const hidden = new Set(store.get(STORE_HIDDEN) || []);
+    if (on) hidden.add(cardId(card)); else hidden.delete(cardId(card));
+    store.set(STORE_HIDDEN, [...hidden]);
+    if (!on) { geom = null; render(true); }
+  }
+  function saveOrder() {
+    store.set(STORE_ORDER, [...chartGrid.querySelectorAll(':scope > .card')].map(cardId));
+  }
+  function setupCard(card, draggable) {
+    const head = card.querySelector('.card-head');
+    if (!head) return;
+    const actions = document.createElement('span');
+    actions.className = 'card-actions';
+    if (draggable) {
+      const grip = document.createElement('span');
+      grip.className = 'grip'; grip.title = 'Drag to reorder'; grip.textContent = '⋮⋮';
+      grip.setAttribute('aria-label', 'Drag to reorder');
+      grip.addEventListener('pointerdown', e => startDrag(e, card));
+      actions.appendChild(grip);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny toggle'; btn.type = 'button'; btn.textContent = 'Hide';
+    btn.addEventListener('click', () => setCollapsed(card, !card.classList.contains('collapsed')));
+    actions.appendChild(btn);
+    head.appendChild(actions);
+  }
+  // Pointer-based reordering (works with mouse and touch): while dragging, the
+  // card follows the pointer through the grid by being moved in the DOM.
+  function startDrag(e, card) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const pointerId = e.pointerId;
+    card.classList.add('dragging');
+    document.body.classList.add('reordering');
+    const move = ev => {
+      if (ev.pointerId !== pointerId) return;
+      // find the sibling card under the pointer by geometry, then place the
+      // dragged card before or after it depending on which half was crossed
+      for (const over of chartGrid.querySelectorAll(':scope > .card')) {
+        if (over === card) continue;
+        const r = over.getBoundingClientRect();
+        if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) continue;
+        const before = ev.clientY < r.top + r.height / 2;
+        if (before) chartGrid.insertBefore(card, over); else chartGrid.insertBefore(card, over.nextSibling);
+        break;
+      }
+    };
+    const end = ev => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      card.classList.remove('dragging');
+      document.body.classList.remove('reordering');
+      saveOrder();
+      render(true);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+  function initCards() {
+    // restore order
+    const order = store.get(STORE_ORDER);
+    if (Array.isArray(order)) {
+      const byId = new Map([...chartGrid.querySelectorAll(':scope > .card')].map(c => [cardId(c), c]));
+      for (const id of order) { const c = byId.get(id); if (c) chartGrid.appendChild(c); }
+    }
+    for (const card of chartGrid.querySelectorAll(':scope > .card')) setupCard(card, true);
+    const stageCard = $('.stage-card');
+    stageCard.dataset.card = 'stage';
+    setupCard(stageCard, false);
+    const hidden = new Set(store.get(STORE_HIDDEN) || []);
+    for (const card of document.querySelectorAll('.card')) {
+      if (hidden.has(cardId(card))) {
+        card.classList.add('collapsed');
+        const btn = card.querySelector('.btn.toggle');
+        if (btn) { btn.textContent = 'Show'; btn.setAttribute('aria-expanded', 'false'); }
+      }
+    }
+  }
+
   // ---------- boot ----------
+  initCards();
   buildRamp();
   readControlsIntoSim();
   $('#speed-out').textContent = speedLabel(ticksPerSecond);
