@@ -30,6 +30,13 @@
     return `${(h / 24).toFixed(1)}d`;
   }
   const fmtMinutes = ticks => (ticks / TICKS_PER_MIN).toFixed(0) + ' min';
+  // Constant-width variant for live readouts: always "Hh MMm" (e.g. 0h 07m, 1h 59m, 2h 00m).
+  function fmtDurFixed(ticks) {
+    if (ticks === null || ticks === undefined || Number.isNaN(ticks)) return '–';
+    const totalMin = Math.round((ticks * TICK_SECONDS) / 60);
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    return `${h}h ${String(m).padStart(2, '0')}m`;
+  }
 
   // Axis ticks for time-based x axes: pick a "nice" time step in ticks.
   const TIME_STEPS = [6, 30, 60, 180, 360, 720, 1080, 2160, 4320, 8640, 17280];
@@ -642,7 +649,7 @@
   function updateKpis(rows) {
     const h = sim.history, snap = sim.last;
     $('#tick').textContent = sim.tick;
-    $('#clock').textContent = fmtDur(sim.tick);
+    $('#clock').textContent = fmtDurFixed(sim.tick);
     $('#kpi-backlog').textContent = fmt(snap.backlogItems);
     const W = TICKS_PER_HOUR;
     const ago = h.length > W ? h[h.length - 1 - W].backlogItems : (h[0] ? h[0].backlogItems : 0);
@@ -697,11 +704,13 @@
     charts.completeness.setData(cohorts);
     charts.completeness.draw();
     const through = completeThrough(cohorts);
-    $('#completeness-note').textContent = through
-      ? `complete (≥99%) through ${fmtDur(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))} ago`
-      : 'nothing fully processed yet';
+    $('#complete-through').textContent = through
+      ? fmtDurFixed(Math.max(0, sim.tick - through.tick - COHORT_TICKS + 1))
+      : '–';
     const f = sim.last;
-    $('#fresh-note').textContent = `now: P50 ${fmtDur(f.fresh50)} · P90 ${fmtDur(f.fresh90)} · P99 ${fmtDur(f.fresh99)} · 3-min windows`;
+    $('#fresh-p50').textContent = fmtDurFixed(f.fresh50);
+    $('#fresh-p90').textContent = fmtDurFixed(f.fresh90);
+    $('#fresh-p99').textContent = fmtDurFixed(f.fresh99);
   }
 
   window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });

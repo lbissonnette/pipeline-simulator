@@ -21,7 +21,7 @@
       <input id="speed" type="range" min="0" max="7" value="3" step="1">
       <output id="speed-out">10 min / s</output>
     </label>
-    <div class="tick-readout">Sim time <b id="clock">0m</b> <span class="tick-small">tick <span id="tick">0</span></span></div>
+    <div class="tick-readout">Sim time <b id="clock" class="num">0h 00m</b> <span class="tick-small">tick <span id="tick" class="num tick-num">0</span></span></div>
   </div>
 </header>
 
@@ -221,7 +221,7 @@
         <div class="card-head"><h2>Completeness by arrival minute</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>% of that minute's conversions processed</span>
-            <span class="unit" id="completeness-note">–</span>
+            <span class="unit" id="completeness-note">complete (≥99%) through <b class="num" id="complete-through">–</b> ago</span>
           </div>
         </div>
         <div class="chart-wrap"><canvas id="chart-completeness"></canvas></div>
@@ -232,7 +232,7 @@
             <span class="lg-item"><i class="sw s1"></i>P50</span>
             <span class="lg-item"><i class="sw s2"></i>P90</span>
             <span class="lg-item"><i class="sw s3"></i>P99</span>
-            <span class="unit" id="fresh-note">minutes · how far back data is still less than that percent complete</span>
+            <span class="unit" id="fresh-note">now: P50 <b class="num" id="fresh-p50">–</b> · P90 <b class="num" id="fresh-p90">–</b> · P99 <b class="num" id="fresh-p99">–</b> · 3-min windows</span>
           </div>
         </div>
         <div class="chart-wrap"><canvas id="chart-fresh"></canvas></div>

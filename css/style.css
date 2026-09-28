@@ -216,5 +216,9 @@ details.advanced[open] summary::before { content: "▾"; }
 details.advanced summary h2 { display: inline; }
 .tile .value.warn { color: var(--critical); }
 .tick-small { color: var(--text-muted); margin-left: 6px; }
+/* fixed-width slots for live numbers so surrounding text never shifts */
+.num { display: inline-block; min-width: 6.5ch; text-align: right; font-variant-numeric: tabular-nums; font-weight: inherit; color: inherit; }
+.num.tick-num { min-width: 5ch; text-align: left; }
+.unit .num { font-weight: 600; }
 .speed input { width: 110px; }
 .speed output { min-width: 84px; }
