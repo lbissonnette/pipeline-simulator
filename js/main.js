@@ -492,7 +492,7 @@
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fillRect(x + 1, y + cell - bh - 1, Math.round((cell - 2) * p), bh);
-        if (b.stallLeft > 0 && !offline) {
+        if (b.stallLeft > 0 && b.stallPoison && !offline) {
           const d = Math.max(3, Math.round(cell * 0.3));
           ctx.fillStyle = C.s2;
           ctx.fillRect(x + cell - d - 1, y + 1, d, d);

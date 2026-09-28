@@ -20,7 +20,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   by default, up to 2,048) and a "done" sink. Each busy cell's colour is how
   long it has been working on its bundle (light = fresh, dark = twice the
   expected bundle time); the white bar at the bottom is progress on that
-  bundle; hatched cells are offline. The dispatcher turns red when its queue is full and the
+  bundle; a red corner mark means the worker is stalled on a conversion of
+  death; hatched cells are offline. The dispatcher turns red when its queue is full and the
   bundler shows "blocked". Dots animate bundles moving between stages. Hover a
   cell for its current bundle, last-tick rate and speed factor.
 - **KPI row** – backlog (with change over the past hour), age of the oldest
