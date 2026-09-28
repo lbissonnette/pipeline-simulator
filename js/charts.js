@@ -84,6 +84,8 @@
 
     setData(history) { this.history = history; }
     setDomain(x0, x1) { this.domain = [x0, x1]; }
+    // markers: [{ start, end (null = still active), cancelled, label, color }] in ticks
+    setMarkers(markers) { this.markers = markers || []; }
     xRange() {
       const h = this.history;
       if (this.xByTick && this.domain) return this.domain;
@@ -111,6 +113,12 @@
       this.draw();
       const row = this.history[this.hoverIndex];
       let html = `<div class="tt-title">${this.titleOf(row)}</div>`;
+      for (const m of this.markers || []) {
+        const mEnd = m.end === null ? Infinity : m.end;
+        if (row.tick >= m.start && row.tick <= mEnd) {
+          html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(m)}"></span><span>${m.label}${m.cancelled && row.tick === m.end ? ' (switched off)' : ''}</span><b></b></div>`;
+        }
+      }
       const ttSeries = this.stacked ? this.series.slice().reverse() : this.series; // top layer first
       for (const s of ttSeries) {
         html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(row[s.rawKey || s.key])}</b></div>`;
@@ -196,6 +204,41 @@
       if (n < 2) { ctx.restore(); return; }
       // keep series inside the plot (a tick-placed row can start just left of the domain)
       ctx.save(); ctx.beginPath(); ctx.rect(l - 1, t - 3, pw + 2, ph + 4); ctx.clip();
+
+      // incident markers: a light band while active, a line at start and end,
+      // an x on the end line when it was switched off manually
+      if (this.markers && this.markers.length) {
+        const xOfT = v => l + ((v - dx0) / Math.max(1, dx1 - dx0)) * pw;
+        ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        let lane = 0;
+        for (const m of this.markers) {
+          const mEnd = m.end === null ? dx1 : m.end;
+          if (mEnd < dx0 || m.start > dx1) continue;
+          const col = this.color(m);
+          const xs = Math.max(l, xOfT(m.start)), xe = Math.min(l + pw, xOfT(mEnd));
+          ctx.globalAlpha = 0.08; ctx.fillStyle = col; ctx.fillRect(xs, t, Math.max(1, xe - xs), ph); ctx.globalAlpha = 1;
+          ctx.strokeStyle = col; ctx.lineWidth = 1;
+          if (m.start >= dx0) { const x = Math.round(xOfT(m.start)) + 0.5; ctx.beginPath(); ctx.moveTo(x, t); ctx.lineTo(x, t + ph); ctx.stroke(); }
+          if (m.end !== null && m.end <= dx1) {
+            const x = Math.round(xOfT(m.end)) + 0.5;
+            ctx.beginPath(); ctx.moveTo(x, t); ctx.lineTo(x, t + ph); ctx.stroke();
+            if (m.cancelled) { // x glyph: switched off by hand
+              ctx.lineWidth = 1.5;
+              ctx.beginPath(); ctx.moveTo(x - 4, t + 2); ctx.lineTo(x + 4, t + 10); ctx.moveTo(x + 4, t + 2); ctx.lineTo(x - 4, t + 10); ctx.stroke();
+            }
+          }
+          // label inside the band, staggered so overlapping incidents stay readable
+          if (m.label && xe - xs > 14) {
+            ctx.fillStyle = cssVar('--text-muted');
+            const ly = t + 2 + (lane % 3) * 11;
+            ctx.save(); ctx.beginPath(); ctx.rect(xs + 1, t, Math.max(0, xe - xs - 2), ph); ctx.clip();
+            ctx.fillText(m.label, xs + 4, ly);
+            ctx.restore();
+            lane++;
+          }
+        }
+      }
 
       // When there are many more points than pixels, draw each pixel column's
       // min and max instead of every point: same shape, far fewer segments.

@@ -491,6 +491,20 @@ test('writer intake policies choose the expected blocked worker', () => {
   }
 });
 
+test('incident log records start, end, and manual switch-off', () => {
+  const sim = new Simulation({ seed: 111 });
+  run(sim, 100);
+  const a = sim.addIncident('spike', 2, 50);
+  const b = sim.addIncident('upstreamDelay', 1, 500);
+  run(sim, 60);
+  const la = sim.incidentLog.find(e => e.id === a.id), lb = sim.incidentLog.find(e => e.id === b.id);
+  assert.equal(la.start, 101); assert.equal(la.end, 150); assert.equal(la.cancelled, false);
+  assert.equal(lb.end, null);
+  sim.cancelIncident(b.id);
+  assert.equal(lb.end, sim.tick); assert.equal(lb.cancelled, true);
+  assert.equal(sim.incidents.length, 0);
+});
+
 test('a single stall never exceeds the cap', () => {
   const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
   run(sim, 400);

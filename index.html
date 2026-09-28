@@ -367,6 +367,7 @@
       <ul>
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
         <li><b>PDF / CDF</b>: the two distribution charts can show either the share of conversions in each bin (PDF, the histogram) or the cumulative share at or below each value (CDF, rising to 100%). The choice is remembered per chart.</li>
+        <li><b>Incident markers</b>: every time chart shades the period an incident was active, with a vertical line where it started and where it ended. An × on the end line means it was switched off by hand rather than expiring. Colours follow the incident type: orange for traffic spikes, red for degraded workers and outages, magenta for conversions of death, yellow for upstream holds.</li>
         <li><b>Layout</b>: every chart card has a Hide button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The arrangement is remembered in this browser.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>

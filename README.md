@@ -60,6 +60,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 - **PDF / CDF** – both distribution charts toggle between the share per bin
   (PDF) and the cumulative share at or below each value (CDF); remembered per
   chart.
+- **Incident markers** – time charts shade each incident's active period with
+  start and end lines; an × marks one that was switched off by hand.
 - **Layout** – each chart card has a Hide button (collapses to its title) and a
   grip to drag it up or down; the arrangement is remembered per browser.
 

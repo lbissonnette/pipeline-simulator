@@ -940,6 +940,21 @@
       : `${fmt(snap.intakeItems)} at bundler`;
   }
 
+  // Incident markers for the time charts, from the model's incident log.
+  const MARKER_COLOR = { spike: '--s2', degrade: '--critical', poison: '--s5', upstreamDelay: '--s4' };
+  function markerLabel(e) {
+    switch (e.type) {
+      case 'spike': return `spike ×${e.magnitude}`;
+      case 'degrade': return e.factor === 0 ? `outage ${fmtInt(e.workers)} workers` : `degraded ${fmtInt(e.workers)} ×${e.factor}`;
+      case 'poison': return `death +${(e.magnitude.share * 100).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}%`;
+      case 'upstreamDelay': return 'upstream hold';
+      default: return e.type;
+    }
+  }
+  function incidentMarkers() {
+    return sim.incidentLog.map(e => ({ start: e.start, end: e.end, cancelled: e.cancelled, label: markerLabel(e), color: MARKER_COLOR[e.type] || '--axis' }));
+  }
+
   // ---------- render ----------
   // The stage and every chart redraw on each animation frame; the numeric
   // readouts (tiles and header figures) refresh a few times a second so the
@@ -980,7 +995,9 @@
     const drawAll = force || !playing;
     const slot = frameNo % chartStride;
     let i = 0;
+    const markers = incidentMarkers();
     for (const [name, c] of Object.entries(charts)) {
+      c.setMarkers(markers);
       const mine = (drawAll || (i++ % chartStride) === slot) && !collapsedFor(c.canvas);
       if (name === 'completeness') { c.setData(cohorts); c.setDomain(firstTick, sim.tick); if (mine) c.draw(); }
       else { c.setData(rows); if (mine) c.draw(); }

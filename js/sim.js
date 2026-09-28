@@ -220,6 +220,9 @@
       this.inflight = null;       // cached inflightPercentiles(), refreshed every cohort
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
+      // Every incident ever fired, for chart markers: { id, type, magnitude,
+      // start, plannedEnd, end (null while active), cancelled }
+      this.incidentLog = [];
       this.nextIncidentId = 1;
       this.totals = { arrived: 0, processed: 0, written: 0, bundlesCut: 0, bundlesDispatched: 0, bundlesCompleted: 0 };
       this.writer = { queue: [] };  // finished bundles waiting to be written, FIFO
@@ -311,6 +314,8 @@
         }
       }
       this.incidents.push(inc);
+      this.incidentLog.push({ id: inc.id, type, magnitude, start: inc.start, plannedEnd: inc.end, end: null, cancelled: false, workers: inc.workers.length, factor: inc.factor, selection: inc.selection });
+      this.pruneIncidentLog();
       return inc;
     }
 
@@ -328,6 +333,8 @@
       }
       if (inc.type === 'upstreamDelay') this.releaseHeld();
       this.incidents = this.incidents.filter(i => i.id !== id);
+      const entry = this.incidentLog.find(e => e.id === id);
+      if (entry) { entry.end = this.tick; entry.cancelled = true; }
     }
 
     activeModifiers() {
@@ -362,10 +369,18 @@
       }
     }
 
+    // Forget incidents that ended before the chart history began.
+    pruneIncidentLog() {
+      const cutoff = this.tick - this.config.historyLength - 60;
+      this.incidentLog = this.incidentLog.filter(e => e.end === null || e.end >= cutoff);
+    }
+
     expireIncidents() {
       const remaining = [];
       for (const inc of this.incidents) {
         if (this.tick > inc.end) {
+          const entry = this.incidentLog.find(e => e.id === inc.id);
+          if (entry) entry.end = inc.end;
           if (inc.type === 'upstreamDelay') this.releaseHeld();
         } else remaining.push(inc);
       }
