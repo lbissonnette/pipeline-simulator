@@ -6,9 +6,11 @@
  * is full the bundler stops cutting (back-pressure) and conversions pile up
  * in its intake buffer. The dispatcher hands each bundle to an idle worker.
  * Workers hold exactly one bundle at a time; every tick a worker draws a
- * processing rate from a configurable distribution and completes that
- * fraction of a bundle. When it finishes, it becomes idle and can take the
- * next bundle on the following tick.
+ * processing rate (conversions per tick) from a configurable distribution and
+ * completes that many conversions of its bundle. When it finishes, it becomes
+ * idle and can take the next bundle on the following tick.
+ *
+ * The model is unitless in time: a tick is whatever the UI says it is.
  *
  * Loaded as a plain <script> in the browser (global `PipelineSim`) and via
  * require() in Node for tests.
@@ -93,10 +95,11 @@
     },
   };
 
+  // Conversions a worker completes this tick. Never negative.
   function sampleRate(rng, dist) {
     const impl = DISTRIBUTIONS[dist.type] || DISTRIBUTIONS.normal;
     const r = impl.sample(rng, dist);
-    return r < 0 ? 0 : r > 1 ? 1 : r;
+    return r < 0 ? 0 : r;
   }
 
   // Mean clamped rate, by sampling.
@@ -110,32 +113,36 @@
 
   // Expected ticks a worker needs to finish one bundle. Because a worker
   // finishes a bundle mid-tick and idles for the rest of it, this is a little
-  // more than 1 / mean rate; Monte Carlo gets it right for any distribution.
-  function expectedBundleTicks(dist, seed) {
+  // more than bundleSize / mean rate; Monte Carlo gets it right for any
+  // distribution, including the clamp at zero.
+  function expectedBundleTicks(dist, bundleSize, seed) {
     const rng = makeRng(seed || 777);
-    const bundles = 3000;
+    const bundles = 200;
     let ticks = 0;
     for (let i = 0; i < bundles; i++) {
       let done = 0, t = 0;
-      while (done < 1 && t < 10000) { done += sampleRate(rng, dist); t++; }
+      while (done < bundleSize && t < 1e6) { done += sampleRate(rng, dist); t++; }
       ticks += t;
     }
     return ticks / bundles;
   }
 
   // ---------- defaults ----------
+  // Defaults assume a tick of 10 seconds: a worker does 10 conversions per
+  // tick (1/s), a bundle of 7,200 takes ~720 ticks (2 hours), and 1,000
+  // workers give ~10,000 conversions per tick of capacity.
   const DEFAULTS = {
-    workers: 100,
-    arrivalRate: 160000,       // mean conversions per tick (Poisson)
+    workers: 1000,
+    arrivalRate: 8000,         // mean conversions per tick (Poisson)
     waveAmplitude: 0,          // 0..1 modulation of arrivals
-    wavePeriod: 300,           // ticks per wave
-    bundleSize: 10000,         // conversions per bundle
-    bundleMaxWait: 2,          // flush a partial bundle after this many ticks
+    wavePeriod: 8640,          // ticks per wave (24 h at 10 s per tick)
+    bundleSize: 7200,          // conversions per bundle
+    bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
     dispatcherCapacity: 10,    // bundles the dispatcher can hold
     routing: 'idle',           // idle | roundRobin | sticky
-    dist: { type: 'normal', mean: 0.2, sd: 0.05, slowFraction: 0.2, slowFactor: 0.25 },
+    dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     heterogeneity: 0,          // sd of per-worker permanent speed multiplier
-    historyLength: 900,
+    historyLength: 4320,       // 12 h
     seed: 42,
   };
 
@@ -398,14 +405,13 @@
           offline++; w.lastRate = 0; w.lastWorked = 0;
           continue;
         }
-        let rate = sampleRate(this.rng, cfg.dist) * w.speed * mods.rateMult;
-        if (rate > 1) rate = 1;
+        const rate = sampleRate(this.rng, cfg.dist) * w.speed * mods.rateMult;
         w.lastRate = rate;
         w.lastWorked = 0;
         const b = w.bundle;
         if (!b) continue;
         busy++;
-        const take = Math.min(rate * cfg.bundleSize, b.remaining);
+        const take = Math.min(rate, b.remaining);
         b.remaining -= take;
         w.lastWorked = take;
         w.processed += take;
@@ -447,7 +453,7 @@
       latencies.sort((a, b) => a - b);
       const pct = p => latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))] : null;
       const n = this.workers.length;
-      const bundleTicks = expectedBundleTicksCached(this.config.dist);
+      const bundleTicks = expectedBundleTicksCached(this.config.dist, this.config.bundleSize);
       const capacity = (n * this.config.bundleSize) / bundleTicks;
       offline = offline || 0;
       return {
@@ -462,6 +468,7 @@
         oldestAge: oldest === null ? 0 : t - oldest,
         maxBundleAge: maxAge,
         latencyP50: pct(0.5), latencyP95: pct(0.95), latencyMax: latencies.length ? latencies[latencies.length - 1] : null,
+        latencies,
         completedBundles: latencies.length,
         busy, offline, idle: n - busy - offline,
         utilization: n - offline > 0 ? busy / (n - offline) : 0,
@@ -473,9 +480,9 @@
   }
 
   let _btKey = null, _btVal = 0;
-  function expectedBundleTicksCached(dist) {
-    const key = JSON.stringify(dist);
-    if (key !== _btKey) { _btKey = key; _btVal = expectedBundleTicks(dist); }
+  function expectedBundleTicksCached(dist, bundleSize) {
+    const key = JSON.stringify(dist) + '|' + bundleSize;
+    if (key !== _btKey) { _btKey = key; _btVal = expectedBundleTicks(dist, bundleSize); }
     return _btVal;
   }
 

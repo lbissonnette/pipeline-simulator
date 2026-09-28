@@ -37,6 +37,9 @@
       this.unit = opts.unit || '';
       this.fill = !!opts.fill;
       this.reference = opts.reference || null; // { key, name } drawn as gray line
+      this.xTicks = opts.xTicks || null;       // (firstTick, lastTick) => [{ value, label }]
+      this.titleOf = opts.titleOf || (row => `Tick ${row.tick}`);
+      this.format = opts.format || fmt;        // value formatter for tooltip
       this.hoverIndex = null;
       this.history = [];
       this.tooltip = document.createElement('div');
@@ -72,12 +75,12 @@
       this.hoverIndex = Math.max(0, Math.min(n - 1, idx));
       this.draw();
       const row = this.history[this.hoverIndex];
-      let html = `<div class="tt-title">Tick ${row.tick}</div>`;
+      let html = `<div class="tt-title">${this.titleOf(row)}</div>`;
       for (const s of this.series) {
-        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${fmt(row[s.key])}</b></div>`;
+        html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${this.format(row[s.key])}</b></div>`;
       }
       if (this.reference) {
-        html += `<div class="tt-row"><span class="tt-swatch tt-ref"></span><span>${this.reference.name}</span><b>${fmt(row[this.reference.key])}</b></div>`;
+        html += `<div class="tt-row"><span class="tt-swatch tt-ref"></span><span>${this.reference.name}</span><b>${this.format(row[this.reference.key])}</b></div>`;
       }
       this.tooltip.innerHTML = html;
       this.tooltip.hidden = false;
@@ -122,14 +125,20 @@
         ctx.beginPath(); ctx.moveTo(l, y); ctx.lineTo(l + pw, y); ctx.stroke();
         ctx.fillStyle = muted; ctx.fillText(fmt(v), l - 6, y);
       }
-      // x labels (tick numbers)
+      // x labels
       if (n > 1) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = muted;
         const first = hist[0].tick, last = hist[n - 1].tick;
-        const xs = niceStep(last - first, 6);
-        for (let tv = Math.ceil(first / xs) * xs; tv <= last; tv += xs) {
-          const i = tv - first;
-          ctx.fillText(String(tv), xOf(i), t + ph + 6);
+        let labels;
+        if (this.xTicks) labels = this.xTicks(first, last);
+        else {
+          labels = [];
+          const xs = niceStep(last - first, 6);
+          for (let tv = Math.ceil(first / xs) * xs; tv <= last; tv += xs) labels.push({ value: tv, label: String(tv) });
+        }
+        for (const { value, label } of labels) {
+          if (value < first || value > last) continue;
+          ctx.fillText(label, xOf(value - first), t + ph + 6);
         }
       }
 

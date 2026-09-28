@@ -1,41 +1,79 @@
 /* UI wiring, stage rendering (worker grid + flow particles), KPIs and charts. */
 (function () {
   'use strict';
-  const { Simulation, DEFAULTS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
+  const { Simulation, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
 
   const $ = sel => document.querySelector(sel);
   const $$ = sel => Array.from(document.querySelectorAll(sel));
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const fmt = window.fmtNumber;
 
+  // ---------- time ----------
+  const TICK_SECONDS = 10;
+  const TICKS_PER_MIN = 60 / TICK_SECONDS;
+  const TICKS_PER_HOUR = 3600 / TICK_SECONDS;
+  const fmtInt = v => Math.round(v).toLocaleString();
+
+  // 720 ticks -> "2h", 735 -> "2h 03m", 42 -> "7m", 3 -> "30s"
+  function fmtDur(ticks) {
+    if (ticks === null || ticks === undefined || Number.isNaN(ticks)) return '–';
+    const s = ticks * TICK_SECONDS;
+    if (s < 60) return `${Math.round(s)}s`;
+    const m = s / 60;
+    if (m < 60) return `${Math.round(m)}m`;
+    const h = m / 60;
+    if (h < 48) {
+      const hh = Math.floor(h), mm = Math.round((h - hh) * 60);
+      if (mm === 60) return `${hh + 1}h`;
+      return mm ? `${hh}h ${String(mm).padStart(2, '0')}m` : `${hh}h`;
+    }
+    return `${(h / 24).toFixed(1)}d`;
+  }
+  const fmtMinutes = ticks => (ticks / TICKS_PER_MIN).toFixed(0) + ' min';
+
+  // Axis ticks for time-based x axes: pick a "nice" time step in ticks.
+  const TIME_STEPS = [6, 30, 60, 180, 360, 720, 1080, 2160, 4320, 8640, 17280];
+  function timeTicks(first, last) {
+    const range = Math.max(1, last - first);
+    let step = TIME_STEPS[TIME_STEPS.length - 1];
+    for (const s of TIME_STEPS) { if (range / s <= 7) { step = s; break; } }
+    const out = [];
+    for (let v = Math.ceil(first / step) * step; v <= last; v += step) out.push({ value: v, label: fmtDur(v) });
+    return out;
+  }
+
   // ---------- state ----------
   const sim = new Simulation({ seed: 42 });
   let playing = false;
-  let ticksPerSecond = 12;
+  const SPEEDS = [6, 12, 30, 60, 120, 180, 360, 720]; // ticks per real second
+  let ticksPerSecond = SPEEDS[3];
   let accumulator = 0;
   let lastFrame = 0;
   let particles = [];
   let ramp = [];
   let hoveredWorker = null;
 
-  const BASE = { waveAmplitude: 0, bundleSize: 10000, bundleMaxWait: 2, workers: 100, dispatcherCapacity: 10, routing: 'idle', heterogeneity: 0 };
-  const NORMAL = { type: 'normal', mean: 0.2, sd: 0.05 };
+  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'idle', heterogeneity: 0 };
+  const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
-    healthy:    Object.assign({}, BASE, { arrivalRate: 150000, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 220000, dist: NORMAL }),
-    slowtail:   Object.assign({}, BASE, { arrivalRate: 150000, dist: { type: 'bimodal', mean: 0.2, sd: 0.04, slowFraction: 0.2, slowFactor: 0.25 } }),
-    hotspots:   Object.assign({}, BASE, { arrivalRate: 140000, routing: 'sticky', heterogeneity: 0.4, dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 150000, waveAmplitude: 0.6, dist: NORMAL }),
+    healthy:    Object.assign({}, BASE, { arrivalRate: 8000, dist: NORMAL }),
+    overloaded: Object.assign({}, BASE, { arrivalRate: 12000, dist: NORMAL }),
+    slowtail:   Object.assign({}, BASE, { arrivalRate: 8000, dist: { type: 'bimodal', mean: 10, sd: 2, slowFraction: 0.2, slowFactor: 0.25 } }),
+    hotspots:   Object.assign({}, BASE, { arrivalRate: 7500, routing: 'sticky', heterogeneity: 0.4, dist: NORMAL }),
+    bursty:     Object.assign({}, BASE, { arrivalRate: 8000, waveAmplitude: 0.6, dist: NORMAL }),
   };
 
   // ---------- controls ----------
   function fmtParam(name, v) {
     switch (name) {
-      case 'waveAmplitude': case 'heterogeneity':
-      case 'dist.mean': case 'dist.sd': case 'dist.slowFraction': case 'dist.slowFactor':
+      case 'waveAmplitude': case 'heterogeneity': case 'dist.slowFraction': case 'dist.slowFactor':
         return Math.round(v * 100) + '%';
-      case 'arrivalRate': case 'bundleSize':
-        return fmt(v);
+      case 'arrivalRate': case 'bundleSize': case 'workers':
+        return fmtInt(v);
+      case 'dist.mean': case 'dist.sd':
+        return Number.isInteger(v) ? String(v) : v.toFixed(v < 5 ? 2 : 1).replace(/\.?0+$/, '');
+      case 'bundleMaxWait':
+        return fmtMinutes(v);
       default: return String(v);
     }
   }
@@ -60,7 +98,8 @@
     }
     partial.dist = dist;
     sim.update(partial);
-    $('#arrival-bundles').textContent = (partial.arrivalRate / partial.bundleSize).toFixed(1).replace(/\.0$/, '');
+    $('#arrival-rate-s').textContent = fmtInt(partial.arrivalRate / TICK_SECONDS);
+    $('#rate-per-s').textContent = (dist.mean / TICK_SECONDS).toFixed(2).replace(/0$/, '');
     $('.bimodal-only').hidden = dist.type !== 'bimodal';
     drawDistribution();
     updateCapacity();
@@ -92,10 +131,11 @@
   $$('[data-incident]').forEach(btn => btn.addEventListener('click', () => {
     const type = btn.dataset.incident;
     const num = id => parseFloat($(id).value);
-    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), num('#spike-dur'));
-    else if (type === 'slowdown') sim.addIncident('slowdown', num('#slow-mag'), num('#slow-dur'));
-    else if (type === 'outage') sim.addIncident('outage', num('#outage-mag') / 100, num('#outage-dur'));
-    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, num('#delay-dur'));
+    const mins = id => Math.max(1, Math.round(num(id) * TICKS_PER_MIN));
+    if (type === 'spike') sim.addIncident('spike', num('#spike-mag'), mins('#spike-dur'));
+    else if (type === 'slowdown') sim.addIncident('slowdown', num('#slow-mag'), mins('#slow-dur'));
+    else if (type === 'outage') sim.addIncident('outage', num('#outage-mag') / 100, mins('#outage-dur'));
+    else if (type === 'upstreamDelay') sim.addIncident('upstreamDelay', 1, mins('#delay-dur'));
     renderIncidents();
     if (!playing) render();
   }));
@@ -103,7 +143,7 @@
   const INCIDENT_LABEL = {
     spike: i => `Traffic spike ×${i.magnitude}`,
     slowdown: i => `Slow workers ×${i.magnitude}`,
-    outage: i => `Outage: ${i.workers.length} workers offline`,
+    outage: i => `Outage: ${fmtInt(i.workers.length)} workers offline`,
     upstreamDelay: () => 'Upstream delay (holding arrivals)',
   };
 
@@ -114,7 +154,7 @@
       const li = document.createElement('li');
       const left = Math.max(0, inc.end - sim.tick);
       const pct = 100 * (1 - left / inc.duration);
-      li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i style="width:${pct}%"></i></span><span>${left}t</span><button title="Cancel" aria-label="Cancel incident">×</button>`;
+      li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i style="width:${pct}%"></i></span><span>${fmtDur(left)}</span><button title="Cancel" aria-label="Cancel incident">×</button>`;
       li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(); });
       ul.appendChild(li);
     }
@@ -137,9 +177,13 @@
     renderIncidents();
     render();
   });
+  function speedLabel(tps) {
+    const minPerSec = tps / TICKS_PER_MIN;
+    return minPerSec >= 60 ? `${minPerSec / 60}h / s` : `${minPerSec} min / s`;
+  }
   $('#speed').addEventListener('input', e => {
-    ticksPerSecond = parseInt(e.target.value, 10);
-    $('#speed-out').textContent = ticksPerSecond + ' ticks/s';
+    ticksPerSecond = SPEEDS[parseInt(e.target.value, 10)];
+    $('#speed-out').textContent = speedLabel(ticksPerSecond);
   });
   document.addEventListener('keydown', e => {
     if (e.target.matches('input, select, textarea')) return;
@@ -157,11 +201,14 @@
     distCanvas.width = W * dpr; distCanvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    const d = sim.config.dist;
+    const xmax = Math.max(5, Math.ceil(Math.max(d.mean * 2, d.mean + 4 * d.sd) / 5) * 5);
+    $('#dist-xmax').textContent = xmax;
     const bins = 40, counts = new Array(bins).fill(0);
     const rng = makeRng(2024), n = 6000;
     for (let i = 0; i < n; i++) {
-      const r = sampleRate(rng, sim.config.dist);
-      counts[Math.min(bins - 1, Math.floor(r * bins))]++;
+      const r = sampleRate(rng, d);
+      counts[Math.min(bins - 1, Math.floor((r / xmax) * bins))]++;
     }
     const max = Math.max(...counts);
     const bw = W / bins;
@@ -174,13 +221,14 @@
       roundTop(ctx, x, y, w, h, Math.min(3, w / 2));
       ctx.fill();
     }
-    // mean marker
-    const m = expectedRate(sim.config.dist);
+    const m = expectedRate(d);
+    const mx = Math.round((m / xmax) * W) + 0.5;
     ctx.strokeStyle = cssVar('--text-2'); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(Math.round(m * W) + 0.5, 0); ctx.lineTo(Math.round(m * W) + 0.5, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mx, 0); ctx.lineTo(mx, H); ctx.stroke();
     ctx.fillStyle = cssVar('--text-2'); ctx.font = '11px system-ui, sans-serif';
-    ctx.textAlign = m > 0.5 ? 'right' : 'left';
-    ctx.fillText(`mean ${Math.round(m * 100)}%`, m * W + (m > 0.5 ? -4 : 4), 10);
+    const right = m / xmax > 0.5;
+    ctx.textAlign = right ? 'right' : 'left';
+    ctx.fillText(`mean ${fmtParam('dist.mean', m)}`, mx + (right ? -4 : 4), 10);
   }
   function roundTop(ctx, x, y, w, h, r) {
     ctx.moveTo(x, y + h);
@@ -192,23 +240,26 @@
     ctx.closePath();
   }
 
+  function bundleTicks() { return expectedBundleTicks(sim.config.dist, sim.config.bundleSize); }
+
   function updateCapacity() {
-    const ticks = expectedBundleTicks(sim.config.dist);
+    const ticks = bundleTicks();
     const cap = (sim.workers.length * sim.config.bundleSize) / ticks;
-    $('#bundle-ticks').textContent = ticks.toFixed(1);
-    $('#capacity').textContent = fmt(cap);
+    $('#bundle-ticks').textContent = fmtDur(ticks);
+    $('#capacity').textContent = fmtInt(cap);
     const rho = sim.config.arrivalRate / Math.max(1e-9, cap);
     const rhoEl = $('#rho');
     rhoEl.textContent = rho.toFixed(2);
     rhoEl.style.color = rho >= 1 ? cssVar('--critical') : '';
-    $('#kpi-cap').textContent = `of ${fmt(cap)} capacity`;
+    $('#kpi-cap').textContent = `of ${fmtInt(cap)} capacity`;
   }
 
   // ---------- simulation loop ----------
   function doTick() {
     const snap = sim.step();
     spawnParticles(sim.events, snap);
-    if (sim.tick % 5 === 0 || sim.incidents.length) renderIncidents();
+    if (sim.tick % 6 === 0 && sim.incidents.length) renderIncidents();
+    else if (sim.incidents.length === 0 && $('#active-incidents').children.length) renderIncidents();
     return snap;
   }
 
@@ -219,7 +270,7 @@
     accumulator += dt * ticksPerSecond;
     let n = Math.floor(accumulator);
     accumulator -= n;
-    if (n > 20) n = 20; // don't stall the frame on a slow machine
+    if (n > 400) { n = 400; accumulator = 0; }
     for (let i = 0; i < n; i++) doTick();
     render();
     requestAnimationFrame(frame);
@@ -233,22 +284,26 @@
   let NODE_R = 34;
 
   function computeGeometry() {
+    const n = sim.workers.length;
+    const rect0 = stage.getBoundingClientRect();
+    const narrow = rect0.width < 640;
+    // taller stage for big pools so cells stay legible
+    const wantH = narrow ? (n > 400 ? 520 : 420) : (n > 400 ? 640 : 460);
+    if (Math.round(rect0.height) !== wantH) stage.style.height = wantH + 'px';
     const dpr = window.devicePixelRatio || 1;
     const rect = stage.getBoundingClientRect();
     const W = rect.width, H = rect.height;
     if (stage.width !== Math.round(W * dpr) || stage.height !== Math.round(H * dpr)) {
       stage.width = Math.round(W * dpr); stage.height = Math.round(H * dpr);
     }
-    const n = sim.workers.length;
     const cols = Math.ceil(Math.sqrt(n));
     const rows = Math.ceil(n / cols);
-    const narrow = W < 640;
     const sideW = narrow ? 0 : 150;
     const pad = 12;
     const gridX = sideW + pad, gridY = narrow ? 80 : pad;
     const gridW = W - sideW * 2 - pad * 2, gridH = H - gridY - pad;
     const gap = n > 200 ? 2 : 3;
-    const cell = Math.floor(Math.min((gridW - gap * (cols - 1)) / cols, (gridH - gap * (rows - 1)) / rows));
+    const cell = Math.max(2, Math.floor(Math.min((gridW - gap * (cols - 1)) / cols, (gridH - gap * (rows - 1)) / rows)));
     const usedW = cols * cell + (cols - 1) * gap, usedH = rows * cell + (rows - 1) * gap;
     const ox = gridX + (gridW - usedW) / 2, oy = gridY + (gridH - usedH) / 2;
     geom = {
@@ -258,6 +313,7 @@
       dispatcher: narrow ? { x: W * 0.62, y: 38 } : { x: sideW / 2, y: H * 0.85 },
       sink: narrow ? { x: W * 0.86, y: 38 } : { x: W - sideW / 2, y: H * 0.5 },
     };
+    NODE_R = narrow ? 28 : 34;
     return geom;
   }
 
@@ -272,34 +328,32 @@
     const now = performance.now();
     const dur = Math.max(160, Math.min(600, 900 / Math.max(1, ticksPerSecond / 6)));
     const g = geom, R = NODE_R;
-    const edge = (node, dir) => g.narrow
-      ? { x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0), y: node.y + (dir === 'down' ? R : 0) }
-      : { x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0), y: node.y + (dir === 'down' ? R : dir === 'up' ? -R : 0) };
+    const edge = (node, dir) => ({
+      x: node.x + (dir === 'out' ? R : dir === 'in' ? -R : 0),
+      y: node.y + (dir === 'down' ? R : dir === 'up' ? -R : 0),
+    });
     const sample = (list, max) => {
       const keep = Math.min(list.length, max), out = [];
       for (let i = 0; i < keep; i++) out.push(list[Math.floor((i / keep) * list.length)]);
       return out;
     };
-    // bundler -> dispatcher
-    for (const [i, e] of sample(events.filter(e => e.type === 'bundle'), 12).entries()) {
+    for (const [i] of sample(events.filter(e => e.type === 'bundle'), 12).entries()) {
       const from = g.narrow ? edge(g.bundler, 'out') : edge(g.bundler, 'down');
       const to = g.narrow ? edge(g.dispatcher, 'in') : edge(g.dispatcher, 'up');
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 12, dur: dur * 0.6, kind: 'in' });
     }
-    // dispatcher -> worker
     for (const [i, e] of sample(events.filter(e => e.type === 'dispatch'), 24).entries()) {
       const to = cellCenter(e.worker);
       const from = g.narrow ? edge(g.dispatcher, 'down') : edge(g.dispatcher, 'out');
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 8, dur, kind: 'in' });
     }
-    // worker -> done
     for (const [i, e] of sample(events.filter(e => e.type === 'complete'), 24).entries()) {
       const from = cellCenter(e.worker);
       const to = g.narrow ? edge(g.sink, 'down') : edge(g.sink, 'in');
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 10, dur, kind: 'out' });
     }
-    // source -> bundler (a few dots per tick, scaled by arrivals)
-    const arr = Math.min(6, Math.round(snap.arrivals / Math.max(1, sim.config.bundleSize)));
+    // arrivals: a steady trickle, doubled during a spike
+    const arr = snap.arrivals <= 0 ? 0 : snap.arrivals > 1.5 * sim.config.arrivalRate ? 2 : 1;
     for (let i = 0; i < arr; i++) {
       let from, to;
       if (snap.heldItems > 0) {
@@ -318,112 +372,119 @@
     ramp = cssVar('--ramp').split(',').map(s => s.trim());
   }
 
-  function cellColor(w) {
-    if (!w.bundle) return cssVar('--cell-idle');
-    const age = sim.tick - w.bundle.dispatchedTick;
-    const expected = expectedBundleTicks(sim.config.dist);
-    const ratio = Math.min(1, age / (4 * expected)); // darkest at 4x the expected time
-    return ramp[Math.round(ratio * (ramp.length - 1))];
-  }
-
-  function drawNode(ctx, x, y, r, title, lines, fillColor) {
+  function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = fillColor; ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = cssVar('--border'); ctx.stroke();
-    ctx.fillStyle = cssVar('--text'); ctx.font = '600 12px system-ui, sans-serif';
+    ctx.lineWidth = 1; ctx.strokeStyle = border; ctx.stroke();
+    ctx.fillStyle = ink; ctx.font = `600 ${title.length > 8 ? 11 : 12}px system-ui, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(title, x, y - (lines.length ? 8 : 0));
-    ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = cssVar('--text-2');
+    ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = ink2;
     lines.forEach((l, i) => ctx.fillText(l, x, y + 7 + i * 13));
   }
 
-  function drawArrow(ctx, x0, y0, x1, y1) {
-    ctx.strokeStyle = cssVar('--axis'); ctx.lineWidth = 1.5;
+  function drawArrow(ctx, x0, y0, x1, y1, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     const a = Math.atan2(y1 - y0, x1 - x0);
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x1 - 7 * Math.cos(a - 0.4), y1 - 7 * Math.sin(a - 0.4));
     ctx.lineTo(x1 - 7 * Math.cos(a + 0.4), y1 - 7 * Math.sin(a + 0.4));
-    ctx.closePath(); ctx.fillStyle = cssVar('--axis'); ctx.fill();
+    ctx.closePath(); ctx.fillStyle = color; ctx.fill();
   }
 
   function drawStage() {
     const g = computeGeometry();
-    NODE_R = g.narrow ? 28 : 34;
     const ctx = sctx;
     ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
     ctx.clearRect(0, 0, g.W, g.H);
     const snap = sim.last;
-    const surface = cssVar('--surface');
+    // resolve theme colours once per frame (getComputedStyle is slow per cell)
+    const C = {
+      surface: cssVar('--surface'), surface2: cssVar('--surface-2'), border: cssVar('--border'),
+      ink: cssVar('--text'), ink2: cssVar('--text-2'), axis: cssVar('--axis'), critical: cssVar('--critical'),
+      idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
+      s1: cssVar('--s1'), s2: cssVar('--s2'),
+    };
 
-    // nodes + connectors
     const gridLeft = g.ox, gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
     const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
     const r = NODE_R;
     if (!g.narrow) {
-      drawArrow(ctx, g.source.x, g.source.y + r, g.bundler.x, g.bundler.y - r);
-      drawArrow(ctx, g.bundler.x, g.bundler.y + r, g.dispatcher.x, g.dispatcher.y - r);
-      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, gridLeft - 6, gridMidY);
-      drawArrow(ctx, gridRight + 6, gridMidY, g.sink.x - r, g.sink.y);
+      drawArrow(ctx, g.source.x, g.source.y + r, g.bundler.x, g.bundler.y - r, C.axis);
+      drawArrow(ctx, g.bundler.x, g.bundler.y + r, g.dispatcher.x, g.dispatcher.y - r, C.axis);
+      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, gridLeft - 6, gridMidY, C.axis);
+      drawArrow(ctx, gridRight + 6, gridMidY, g.sink.x - r, g.sink.y, C.axis);
     } else {
-      drawArrow(ctx, g.source.x + r, g.source.y, g.bundler.x - r, g.bundler.y);
-      drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.dispatcher.x - r, g.dispatcher.y);
-      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.sink.x - r, g.sink.y);
+      drawArrow(ctx, g.source.x + r, g.source.y, g.bundler.x - r, g.bundler.y, C.axis);
+      drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.dispatcher.x - r, g.dispatcher.y, C.axis);
+      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.sink.x - r, g.sink.y, C.axis);
     }
     const holding = snap.heldItems > 0;
     const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
+    const blocked = full && snap.intakeItems >= sim.config.bundleSize;
     drawNode(ctx, g.source.x, g.source.y, r, 'Source',
       holding ? [`holding ${fmt(snap.heldItems)}`, 'delayed'] : [`${fmt(snap.arrivals)} / tick`],
-      holding ? cssVar('--surface-2') : surface);
+      holding ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
     drawNode(ctx, g.bundler.x, g.bundler.y, r, 'Bundler',
-      [`${fmt(snap.intakeItems)} held`, full ? 'blocked' : `${snap.cut} cut`],
-      full && snap.intakeItems >= sim.config.bundleSize ? cssVar('--surface-2') : surface);
-    drawNode(ctx, g.dispatcher.x, g.dispatcher.y, r, g.narrow ? 'Dispatch' : 'Dispatcher',
+      [`${fmt(snap.intakeItems)} held`, blocked ? 'blocked' : `${snap.cut} cut`],
+      blocked ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    drawNode(ctx, g.dispatcher.x, g.dispatcher.y, r, 'Dispatcher',
       [`${snap.dispatcherQueued} / ${snap.dispatcherCapacity} queued`, `${snap.dispatched} sent`],
-      full ? cssVar('--surface-2') : surface);
+      full ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
     if (full) {
       ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
-      ctx.lineWidth = 2; ctx.strokeStyle = cssVar('--critical'); ctx.stroke();
+      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
     }
-    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.processed)} total`, `${fmt(snap.processed)} / tick`], surface);
+    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.processed)} total`, `${fmt(snap.processed)} / tick`],
+      C.surface, C.ink, C.ink2, C.border);
 
     // worker grid
-    const offlineFill = cssVar('--cell-offline'), offlineInk = cssVar('--cell-offline-ink');
     const cell = g.cell, rad = Math.min(4, cell / 4);
+    const expected = bundleTicks();
+    const ageScale = 2 * expected; // darkest at 2x the expected bundle time
+    const showBar = cell >= 9;
+    const tick = sim.tick;
     for (let i = 0; i < sim.workers.length; i++) {
       const w = sim.workers[i];
       const c = i % g.cols, rr = Math.floor(i / g.cols);
       const x = g.ox + c * (cell + g.gap), y = g.oy + rr * (cell + g.gap);
-      const offline = w.offlineUntil >= sim.tick;
-      ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad);
-      ctx.fillStyle = offline ? offlineFill : cellColor(w);
-      ctx.fill();
-      if (offline) {
-        ctx.save(); ctx.clip();
-        ctx.strokeStyle = offlineInk; ctx.lineWidth = 1;
-        for (let d = -cell; d < cell * 2; d += 5) {
+      const offline = w.offlineUntil >= tick;
+      let fill;
+      if (offline) fill = C.offline;
+      else if (!w.bundle) fill = C.idle;
+      else {
+        const ratio = Math.min(1, (tick - w.bundle.dispatchedTick) / ageScale);
+        fill = ramp[Math.round(ratio * (ramp.length - 1))];
+      }
+      ctx.fillStyle = fill;
+      if (rad >= 2) { ctx.beginPath(); roundRect(ctx, x, y, cell, cell, rad); ctx.fill(); }
+      else ctx.fillRect(x, y, cell, cell);
+      if (offline && cell >= 6) {
+        ctx.save(); ctx.beginPath(); ctx.rect(x, y, cell, cell); ctx.clip();
+        ctx.strokeStyle = C.offlineInk; ctx.lineWidth = 1;
+        for (let d = -cell; d < cell * 2; d += 4) {
           ctx.beginPath(); ctx.moveTo(x + d, y + cell); ctx.lineTo(x + d + cell, y); ctx.stroke();
         }
         ctx.restore();
       }
-      if (w.bundle && cell >= 10) {
+      if (w.bundle && showBar) {
         const b = w.bundle;
         const p = 1 - b.remaining / b.size;
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.fillRect(x + 2, y + cell - bh - 2, Math.round((cell - 4) * p), bh);
+        ctx.fillRect(x + 1, y + cell - bh - 1, Math.round((cell - 2) * p), bh);
       }
       if (hoveredWorker === i) {
-        ctx.lineWidth = 2; ctx.strokeStyle = cssVar('--text');
-        ctx.beginPath(); roundRect(ctx, x + 1, y + 1, cell - 2, cell - 2, rad); ctx.stroke();
+        ctx.lineWidth = 2; ctx.strokeStyle = C.ink;
+        ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2);
       }
     }
 
     // particles
     const now = performance.now();
     const alive = [];
-    const colIn = cssVar('--s1'), colOut = cssVar('--s2');
     for (const p of particles) {
       const u = (now - p.t0) / p.dur;
       if (u >= 1) continue;
@@ -432,9 +493,9 @@
       const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
       const x = p.x0 + (p.x1 - p.x0) * e, y = p.y0 + (p.y1 - p.y0) * e;
       ctx.beginPath(); ctx.arc(x, y, p.kind === 'arr' ? 2.5 : 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = surface; ctx.fill();
+      ctx.fillStyle = C.surface; ctx.fill();
       ctx.beginPath(); ctx.arc(x, y, p.kind === 'arr' ? 1.5 : 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = p.kind === 'out' ? colOut : colIn; ctx.fill();
+      ctx.fillStyle = p.kind === 'out' ? C.s2 : C.s1; ctx.fill();
     }
     particles = alive;
   }
@@ -468,8 +529,8 @@
     const b = w.bundle;
     tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : b ? '' : ' · idle'}</div>` +
       (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
-           `<div class="tt-row"><span>Working for</span><b>${sim.tick - b.dispatchedTick}t · conversions aged ${sim.tick - b.createdTick}t</b></div>` : '') +
-      `<div class="tt-row"><span>Last tick rate</span><b>${Math.round(w.lastRate * 100)}% of a bundle</b></div>` +
+           `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` : '') +
+      `<div class="tt-row"><span>Last tick rate</span><b>${w.lastRate.toFixed(1)} conversions</b></div>` +
       `<div class="tt-row"><span>Speed factor</span><b>×${w.speed.toFixed(2)}</b></div>` +
       `<div class="tt-row"><span>Completed</span><b>${w.completed} bundles · ${fmt(w.processed)} conv.</b></div>`;
     tooltip.hidden = false;
@@ -480,73 +541,96 @@
   stage.addEventListener('pointerleave', () => { hoveredWorker = null; tooltip.hidden = true; if (!playing) drawStage(); });
 
   // ---------- charts ----------
+  const timeOpts = { xTicks: timeTicks, titleOf: row => `${fmtDur(row.tick)} (tick ${row.tick})` };
   const charts = {
-    backlog: new LineChart($('#chart-backlog'), { series: [{ key: 'backlogItems', name: 'Backlog', color: '--s1' }], fill: true }),
-    throughput: new LineChart($('#chart-throughput'), {
-      series: [{ key: 'arrivals', name: 'Arrivals', color: '--s1' }, { key: 'processed', name: 'Throughput', color: '--s2' }],
+    backlog: new LineChart($('#chart-backlog'), Object.assign({ series: [{ key: 'backlogItems', name: 'Backlog', color: '--s1' }], fill: true }, timeOpts)),
+    throughput: new LineChart($('#chart-throughput'), Object.assign({
+      series: [{ key: 'arrivals', name: 'Arrivals / tick', color: '--s1' }, { key: 'processed', name: 'Throughput / tick', color: '--s2' }],
       reference: { key: 'nominalCapacity', name: 'Expected capacity' },
-    }),
-    latency: new LineChart($('#chart-latency'), { series: [{ key: 'latencyP50', name: 'p50', color: '--s1' }, { key: 'latencyP95', name: 'p95', color: '--s2' }] }),
-    dispatcher: new LineChart($('#chart-dispatcher'), {
+    }, timeOpts)),
+    latency: new LineChart($('#chart-latency'), Object.assign({
+      series: [{ key: 'latP50Min', name: 'p50 (min)', color: '--s1' }, { key: 'latP95Min', name: 'p95 (min)', color: '--s2' }],
+    }, timeOpts)),
+    dispatcher: new LineChart($('#chart-dispatcher'), Object.assign({
       series: [{ key: 'dispatcherQueued', name: 'Bundles waiting', color: '--s1' }], fill: true,
       reference: { key: 'dispatcherCapacity', name: 'Capacity' },
-    }),
-    util: new LineChart($('#chart-util'), { series: [{ key: 'utilPct', name: 'Busy share', color: '--s1' }], fill: true }),
+    }, timeOpts)),
+    util: new LineChart($('#chart-util'), Object.assign({ series: [{ key: 'utilPct', name: 'Busy share (%)', color: '--s1' }], fill: true }, timeOpts)),
   };
 
-  // Smooth the noisy per-tick series with a short moving average for display.
-  function smoothed(history) {
+  // Chart rows: 5-minute moving averages for the noisy per-tick series and a
+  // 30-minute rolling window for latency percentiles (few bundles finish per tick).
+  const AVG_WIN = 5 * TICKS_PER_MIN, LAT_WIN = 30 * TICKS_PER_MIN;
+  function chartRows(history) {
     const out = new Array(history.length);
-    const win = 5;
-    let sa = 0, sp = 0, q = [];
+    let sa = 0, sp = 0; const q = [];
+    const latQ = []; let latCount = 0;
     for (let i = 0; i < history.length; i++) {
       const h = history[i];
       q.push(h); sa += h.arrivals; sp += h.processed;
-      if (q.length > win) { const d = q.shift(); sa -= d.arrivals; sp -= d.processed; }
-      out[i] = Object.assign({}, h, { arrivals: sa / q.length, processed: sp / q.length, utilPct: h.utilization * 100 });
+      if (q.length > AVG_WIN) { const d = q.shift(); sa -= d.arrivals; sp -= d.processed; }
+      latQ.push(h.latencies); latCount += h.latencies.length;
+      if (latQ.length > LAT_WIN) latCount -= latQ.shift().length;
+      let p50 = null, p95 = null;
+      if (latCount >= 5 && (i % 3 === 0 || i === history.length - 1)) {
+        const all = [];
+        for (const arr of latQ) for (const v of arr) all.push(v);
+        all.sort((a, b) => a - b);
+        p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_MIN;
+        p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_MIN;
+      } else if (i > 0 && latCount >= 5) {
+        p50 = out[i - 1].latP50Min; p95 = out[i - 1].latP95Min;
+      }
+      out[i] = Object.assign({}, h, {
+        arrivals: sa / q.length, processed: sp / q.length, utilPct: h.utilization * 100,
+        latP50Min: p50, latP95Min: p95,
+      });
     }
     return out;
   }
 
   // ---------- KPIs ----------
-  function updateKpis() {
+  function updateKpis(rows) {
     const h = sim.history, snap = sim.last;
     $('#tick').textContent = sim.tick;
+    $('#clock').textContent = fmtDur(sim.tick);
     $('#kpi-backlog').textContent = fmt(snap.backlogItems);
-    const ago = h.length > 60 ? h[h.length - 61].backlogItems : (h[0] ? h[0].backlogItems : 0);
+    const W = TICKS_PER_HOUR;
+    const ago = h.length > W ? h[h.length - 1 - W].backlogItems : (h[0] ? h[0].backlogItems : 0);
     const d = snap.backlogItems - ago;
     const deltaEl = $('#kpi-backlog-delta');
-    if (h.length < 5) { deltaEl.textContent = 'conversions waiting'; deltaEl.className = 'delta'; }
+    if (h.length < 30) { deltaEl.textContent = 'conversions in the system'; deltaEl.className = 'delta'; }
     else {
-      deltaEl.textContent = `${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d))} in 60 ticks`;
-      deltaEl.className = 'delta ' + (d > 50 ? 'up' : d < -50 ? 'down' : '');
+      deltaEl.textContent = `${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d))} past hour`;
+      deltaEl.className = 'delta ' + (d > 500 ? 'up' : d < -500 ? 'down' : '');
     }
-    $('#kpi-oldest').textContent = fmt(snap.oldestAge);
-    const recent = h.slice(-20);
-    const avg = k => recent.length ? recent.reduce((s, r) => s + (r[k] || 0), 0) / recent.length : 0;
-    const p95s = recent.map(r => r.latencyP95).filter(v => v !== null), p50s = recent.map(r => r.latencyP50).filter(v => v !== null);
-    const mx = a => a.length ? Math.max(...a) : null;
-    const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
-    $('#kpi-p95').textContent = p95s.length ? fmt(mx(p95s)) + 't' : '–';
-    $('#kpi-p50').textContent = p50s.length ? `p50 ${fmt(med(p50s))}t · 20-tick window` : 'nothing completed yet';
-    $('#kpi-in').textContent = fmt(avg('arrivals'));
-    $('#kpi-out').textContent = fmt(avg('processed'));
+    $('#kpi-oldest').textContent = fmtDur(snap.oldestAge);
+    const last = rows[rows.length - 1];
+    if (last && last.latP95Min !== null) {
+      $('#kpi-p95').textContent = fmtDur(last.latP95Min * TICKS_PER_MIN);
+      $('#kpi-p50').textContent = `p50 ${fmtDur(last.latP50Min * TICKS_PER_MIN)} · 30-min window`.replace(' window', '');
+    } else {
+      $('#kpi-p95').textContent = '–';
+      $('#kpi-p50').textContent = 'no bundles finished yet';
+    }
+    $('#kpi-in').textContent = last ? fmt(last.arrivals) : '0';
+    $('#kpi-out').textContent = last ? fmt(last.processed) : '0';
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
+    $('#kpi-workers').textContent = `${fmtInt(snap.idle)} idle · ${fmtInt(snap.offline)} offline`;
     const dq = $('#kpi-dispatcher');
     dq.textContent = `${snap.dispatcherQueued} / ${snap.dispatcherCapacity}`;
     dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);
     $('#kpi-upstream').textContent = snap.heldItems > 0
-      ? `${fmt(snap.intakeItems)} at bundler · ${fmt(snap.heldItems)} upstream`
-      : `${fmt(snap.intakeItems)} waiting at bundler`;
-    $('#kpi-workers').textContent = `${snap.idle} idle · ${snap.offline} offline`;
+      ? `${fmt(snap.intakeItems)} at bundler · ${fmt(snap.heldItems)} held`
+      : `${fmt(snap.intakeItems)} at bundler`;
   }
 
   // ---------- render ----------
   function render() {
     drawStage();
-    updateKpis();
-    const data = smoothed(sim.history);
-    for (const c of Object.values(charts)) { c.setData(data); c.draw(); }
+    const rows = chartRows(sim.history);
+    updateKpis(rows);
+    for (const c of Object.values(charts)) { c.setData(rows); c.draw(); }
   }
 
   window.addEventListener('resize', () => { drawDistribution(); render(); });
@@ -558,8 +642,7 @@
   buildRamp();
   readControlsIntoSim();
   $('.chip[data-preset="healthy"]').classList.add('active');
-  // warm up so the page opens on a live system rather than an empty grid
-  for (let i = 0; i < 40; i++) sim.step();
+  $('#speed-out').textContent = speedLabel(ticksPerSecond);
   render();
   setPlaying(true);
 })();

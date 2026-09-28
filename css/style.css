@@ -211,3 +211,6 @@ details.advanced summary::before { content: "▸"; color: var(--text-muted); fon
 details.advanced[open] summary::before { content: "▾"; }
 details.advanced summary h2 { display: inline; }
 .tile .value.warn { color: var(--critical); }
+.tick-small { color: var(--text-muted); margin-left: 6px; }
+.speed input { width: 110px; }
+.speed output { min-width: 84px; }
