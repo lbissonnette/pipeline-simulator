@@ -38,8 +38,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   its five minutes. The P99 fresh time is the age of the oldest window still
   below 99% complete (P90 and P50 likewise), counted from the start of the
   window's oldest minute. Recomputed every simulated minute; 0 means every
-  window has passed that threshold. Under the Healthy preset it settles near
-  P50 1h, P90 1h48m, P99 2h.
+  window has passed that threshold.
 - **End-to-end processing time distribution** – a histogram of bundle
   end-to-end time for the last 12 hours and the last 7 days on the same axes.
   Each window is weighted by conversions and normalised to its own total, so
@@ -70,9 +69,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Partial-bundle flush | Minutes a partial bundle waits before being sent anyway. |
 | | Random seed | Seed for the run; Reset replays it. |
 
-Presets: **Healthy** (ρ ≈ 0.6), **Overloaded** (ρ ≈ 1.2), **No expensive
-tail** (every bundle takes ~20 min), **Sticky partitions** and **Bursty
-traffic**. The speed control runs from 1 simulated minute per real
+The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
 tick.
 

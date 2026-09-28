@@ -28,17 +28,6 @@
 <main class="layout">
   <aside class="controls" aria-label="Parameters">
     <section class="panel">
-      <h2>Presets</h2>
-      <div class="preset-row">
-        <button class="chip" data-preset="healthy" title="Arrivals at ~60% of capacity">Healthy</button>
-        <button class="chip" data-preset="overloaded" title="Arrivals above capacity: backlog grows without bound">Overloaded</button>
-        <button class="chip" data-preset="clean" title="No expensive conversions: every bundle takes ~20 min">No expensive tail</button>
-        <button class="chip" data-preset="sticky" title="Sticky partition routing: bundles wait for their assigned worker">Sticky partitions</button>
-        <button class="chip" data-preset="bursty" title="Traffic swings ±60% over a day">Bursty traffic</button>
-      </div>
-    </section>
-
-    <section class="panel">
       <h2>Incoming load</h2>
       <label class="field">
         <span class="lbl">Arrival rate <output data-out="arrivalRate">5,200</output> <small>conversions / tick · <span id="arrival-rate-s">520</span> / s</small></span>

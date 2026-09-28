@@ -62,20 +62,6 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  // 1,200-conversion bundles (20 min of work) plus ~1.8 expensive conversions at
-  // 2 ± 3 min each: end-to-end median ~23 min, p99 ~45 min, capacity ~8,600/tick.
-  const BASE = { waveAmplitude: 0, bundleSize: 1200, bundleMaxWait: 30, workers: 1024, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0015, expensiveCost: 12, expensiveCostSd: 18 };
-  const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
-  const PRESETS = {
-    // normal operation keeps ~60% of the pool busy (rho 0.6)
-    healthy:    Object.assign({}, BASE, { arrivalRate: 5200, dist: NORMAL }),
-    overloaded: Object.assign({}, BASE, { arrivalRate: 10400, dist: NORMAL }),
-    // no expensive conversions: every bundle takes ~20 min; capacity ~10,200/tick
-    clean:      Object.assign({}, BASE, { arrivalRate: 6150, expensiveFraction: 0, dist: NORMAL }),
-    sticky:     Object.assign({}, BASE, { arrivalRate: 5200, routing: 'sticky', dist: NORMAL }),
-    bursty:     Object.assign({}, BASE, { arrivalRate: 5200, waveAmplitude: 0.6, dist: NORMAL }),
-  };
-
   // ---------- controls ----------
   function fmtParam(name, v) {
     switch (name) {
@@ -129,22 +115,7 @@
     updateCapacity();
   }
 
-  function applyToControls(cfg) {
-    for (const el of $$('[data-param]')) {
-      if (cfg[el.dataset.param] !== undefined) el.value = cfg[el.dataset.param];
-    }
-    if (cfg.dist) {
-      for (const el of $$('[data-dist]')) {
-        if (cfg.dist[el.dataset.dist] !== undefined) el.value = cfg.dist[el.dataset.dist];
-      }
-    }
-    readControlsIntoSim();
-  }
-
-  $$('[data-param], [data-dist]').forEach(el => el.addEventListener('input', () => {
-    $$('.chip.active').forEach(c => c.classList.remove('active'));
-    readControlsIntoSim();
-  }));
+  $$('[data-param], [data-dist]').forEach(el => el.addEventListener('input', readControlsIntoSim));
 
   // Warn when both the dispatcher and the degradation target the lowest indices.
   function updateDegradeWarning() {
@@ -152,12 +123,6 @@
     $('#degrade-warning').hidden = !both;
   }
   $('#degrade-sel').addEventListener('change', updateDegradeWarning);
-
-  $$('[data-preset]').forEach(btn => btn.addEventListener('click', () => {
-    applyToControls(PRESETS[btn.dataset.preset]);
-    $$('.chip.active').forEach(c => c.classList.remove('active'));
-    btn.classList.add('active');
-  }));
 
   $$('[data-incident]').forEach(btn => btn.addEventListener('click', () => {
     const type = btn.dataset.incident;
@@ -903,7 +868,6 @@
   // ---------- boot ----------
   buildRamp();
   readControlsIntoSim();
-  $('.chip[data-preset="healthy"]').classList.add('active');
   $('#speed-out').textContent = speedLabel(ticksPerSecond);
   render(true);
   setPlaying(true);
