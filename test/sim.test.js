@@ -15,8 +15,12 @@ const REF = { bundleSize: 7200, expensiveFraction: 0.0001, expensiveCost: 120, e
 function run(sim, ticks) { for (let i = 0; i < ticks; i++) sim.step(); return sim.last; }
 function invariants(sim) {
   assert.ok(sim.dispatcher.length <= sim.config.dispatcherCapacity, 'dispatcher over capacity');
-  const { arrived, processed } = sim.totals;
-  assert.ok(Math.abs(arrived - (processed + sim.last.backlogItems)) < 1e-3, 'items not conserved');
+  assert.ok(sim.writer.queue.length <= sim.config.writerCapacity, 'writer over capacity');
+  const { arrived, processed, written } = sim.totals;
+  // backlog = unprocessed work + processed-but-unwritten work (writer buffer, blocked workers)
+  const unprocessed = sim.last.backlogItems - sim.last.writerItems - sim.last.blockedItems;
+  assert.ok(Math.abs(arrived - (processed + unprocessed)) < 1e-3, 'items not conserved');
+  assert.ok(written <= processed + 1e-6, 'written more than processed');
 }
 
 test('defaults describe the intended scale', () => {
@@ -85,7 +89,7 @@ test('backlog drains after arrivals stop', () => {
 test('workers hold at most one bundle', () => {
   const sim = new Simulation({ arrivalRate: 12000, seed: 8 });
   run(sim, 1500);
-  assert.equal(sim.totals.bundlesDispatched, sim.totals.bundlesCompleted + sim.workers.filter(w => w.bundle).length);
+  assert.equal(sim.totals.bundlesDispatched, sim.totals.bundlesCompleted + sim.workers.filter(w => w.bundle).length + sim.writer.queue.length);
 });
 
 test('outage takes workers offline; idle routing avoids them', () => {
@@ -188,10 +192,9 @@ test('per-minute completeness: cohorts conserve counts and age toward 100%', () 
   const arrived = rows.reduce((s, r) => s + r.arrived, 0);
   const processed = rows.reduce((s, r) => s + r.processed, 0);
   assert.ok(Math.abs(arrived - sim.totals.arrived) < 1e-3, `arrived ${arrived} vs ${sim.totals.arrived}`);
-  // bundles are written atomically: cohorts are credited only for completed
-  // bundles, so cohort-processed = total processed minus work-in-progress
-  const inProgress = sim.workers.reduce((s, w) => s + (w.bundle ? w.bundle.size - w.bundle.remaining : 0), 0);
-  assert.ok(Math.abs(processed - (sim.totals.processed - inProgress)) < 1e-3, `processed ${processed} vs ${sim.totals.processed - inProgress}`);
+  // bundles are written atomically: cohorts are credited only when the writer
+  // has written the whole bundle, so cohort-processed = total written
+  assert.ok(Math.abs(processed - sim.totals.written) < 1e-3, `processed ${processed} vs written ${sim.totals.written}`);
   // recent minutes are 0% until their bundle completes (~2 h), older ones are done
   for (const r of rows.slice(-100)) assert.equal(r.pct, 0, `young cohort ${r.cohort} at ${r.pct}%`);
   for (const r of rows.slice(0, 60)) assert.ok(r.pct > 99.9, `old cohort ${r.cohort} at ${r.pct}%`);
@@ -407,10 +410,8 @@ test('in-flight age: counts match the backlog and percentiles are ordered', () =
   run(sim, 2000);
   const rows = sim.inflightByAge();
   const total = rows.reduce((s, r) => s + r.count, 0);
-  // in flight = not yet written out: the backlog's remaining work plus the
-  // already-worked part of bundles still in progress (written only at the end)
-  const workedNotWritten = sim.workers.reduce((s, w) => s + (w.bundle ? w.bundle.size - w.bundle.remaining : 0), 0);
-  assert.ok(Math.abs(total - (sim.last.backlogItems + workedNotWritten)) < 1e-3, `${total} vs ${sim.last.backlogItems + workedNotWritten}`);
+  // in flight = arrived but not yet written out
+  assert.ok(Math.abs(total - (sim.totals.arrived - sim.totals.written)) < 1e-3, `${total} vs ${sim.totals.arrived - sim.totals.written}`);
   for (let i = 1; i < rows.length; i++) assert.ok(rows[i].age >= rows[i - 1].age);
   const p = sim.inflightPercentiles();
   assert.ok(p[50] <= p[90] && p[90] <= p[99], JSON.stringify(p));
@@ -439,6 +440,55 @@ test('stalls record whether they are on a conversion of death', () => {
   seen.plain = 0;
   for (let i = 0; i < 900; i++) { sim.step(); tally(); }
   assert.ok(seen.poison > 0, `poison ${seen.poison}`);
+});
+
+test('writer: default rate keeps up, buffer bounded, nothing blocked', () => {
+  const sim = new Simulation({ seed: 101 });
+  let maxQ = 0, blockedTicks = 0;
+  for (let i = 0; i < 3000; i++) { sim.step(); maxQ = Math.max(maxQ, sim.last.writerQueued); if (sim.last.blocked) blockedTicks++; }
+  assert.ok(maxQ <= sim.config.writerCapacity);
+  assert.equal(blockedTicks, 0);
+  assert.ok(sim.totals.written > 0.9 * sim.totals.processed, 'writer should be keeping up');
+  invariants(sim);
+});
+
+test('writer: a slow writer caps throughput and blocks workers', () => {
+  const sim = new Simulation({ seed: 102, writeRate: 3000, writerCapacity: 8 });
+  run(sim, 3000);
+  const tail = sim.history.slice(-600);
+  const writtenPerTick = tail.reduce((s, h) => s + h.written, 0) / tail.length;
+  assert.ok(Math.abs(writtenPerTick - 3000) < 60, `written/tick ${writtenPerTick}`);
+  assert.ok(sim.last.blocked > 100, `blocked ${sim.last.blocked}`);
+  assert.equal(sim.last.busy + sim.last.blocked + sim.last.idle + sim.last.offline, N);
+  assert.equal(sim.last.nominalCapacity, 3000);
+  // end-to-end latency now includes the wait for the writer
+  const lat = sim.latencySamples(300).map(c => c.latency);
+  const med = lat.sort((a, b) => a - b)[Math.floor(lat.length / 2)];
+  assert.ok(med > 200 * 6, `median ${med / 6} min`);
+  invariants(sim);
+});
+
+test('writer intake policies choose the expected blocked worker', () => {
+  for (const policy of ['fifo', 'lowestIndex', 'random']) {
+    // one bundle written per tick, a one-slot buffer: exactly one admission per tick once saturated
+    const sim = new Simulation({ seed: 103, writeRate: 1200, writerCapacity: 1, writerIntake: policy, expensiveFraction: 0 });
+    run(sim, 600);
+    assert.ok(sim.last.blocked > 50, `${policy}: blocked ${sim.last.blocked}`);
+    for (let i = 0; i < 20; i++) {
+      const blockedBefore = sim.workers.filter(w => w.bundle && w.bundle.finished).map(w => ({ id: w.id, t: w.bundle.finishedTick }));
+      sim.step();
+      const admitted = sim.events.filter(e => e.type === 'complete').map(e => e.worker);
+      if (!admitted.length || !blockedBefore.length) continue;
+      const first = admitted[0];
+      if (policy === 'lowestIndex') assert.equal(first, Math.min(...blockedBefore.map(b => b.id)));
+      if (policy === 'fifo') {
+        const minT = Math.min(...blockedBefore.map(b => b.t));
+        const chosen = blockedBefore.find(b => b.id === first);
+        assert.ok(chosen && chosen.t === minT, `fifo admitted ${first} finished at ${chosen && chosen.t}, earliest ${minT}`);
+      }
+    }
+    invariants(sim);
+  }
 });
 
 test('a single stall never exceeds the cap', () => {

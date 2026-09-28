@@ -151,6 +151,12 @@
     bundleSize: 1200,          // conversions per bundle (20 min at 10/tick)
     bundleMaxWait: 30,         // flush a partial bundle after this many ticks (5 min)
     dispatcherCapacity: 1024,  // bundles the dispatcher can hold
+    // Buffered writer: finished bundles wait here to be written out. A bundle
+    // counts as complete only once fully written. When the buffer is full,
+    // workers holding finished bundles are blocked until a slot frees.
+    writeRate: 9000,           // conversions written per tick (900 per second)
+    writerCapacity: 256,       // bundles the writer buffer can hold
+    writerIntake: 'fifo',      // which blocked worker is admitted first: fifo | lowestIndex | random
     routing: 'lowestIdle',     // lowestIdle | idle | roundRobin | sticky
     dist: { type: 'normal', mean: 10, sd: 2.5, slowFraction: 0.2, slowFactor: 0.25 }, // conversions / tick / worker
     // Expensive conversions: a small share of conversions each cost a fixed
@@ -215,7 +221,8 @@
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
       this.nextIncidentId = 1;
-      this.totals = { arrived: 0, processed: 0, bundlesCut: 0, bundlesDispatched: 0, bundlesCompleted: 0 };
+      this.totals = { arrived: 0, processed: 0, written: 0, bundlesCut: 0, bundlesDispatched: 0, bundlesCompleted: 0 };
+      this.writer = { queue: [] };  // finished bundles waiting to be written, FIFO
       this.history = [];
       this.events = [];
       this.workers = [];
@@ -228,9 +235,11 @@
       while (ws.length > n) {
         const w = ws.pop();
         if (!w.bundle) continue;
-        // hand its work back: to the dispatcher if there is room, else to the
-        // front of the intake buffer (keeping the conversions' arrival minutes)
-        if (this.dispatcher.length < this.config.dispatcherCapacity) this.dispatcher.unshift(w.bundle);
+        // a finished bundle goes to the writer regardless of its capacity;
+        // unfinished work goes back to the dispatcher if there is room, else
+        // to the front of the intake buffer (keeping arrival minutes)
+        if (w.bundle.finished) this.writer.queue.push(w.bundle);
+        else if (this.dispatcher.length < this.config.dispatcherCapacity) this.dispatcher.unshift(w.bundle);
         else this.returnToIntake(w.bundle);
       }
       while (ws.length < n) {
@@ -628,6 +637,55 @@
       return n;
     }
 
+    // ---------- buffered writer ----------
+    // Write up to writeRate conversions from the front of the buffer. A bundle
+    // is complete (credited to its cohorts, recorded as a completion) only
+    // when it has been written in full.
+    drainWriter() {
+      const cfg = this.config, t = this.tick, q = this.writer.queue;
+      let budget = cfg.writeRate, written = 0;
+      const latencies = [];
+      while (q.length && budget > 1e-9) {
+        const b = q[0];
+        const take = Math.min(budget, b.toWrite);
+        b.toWrite -= take; budget -= take; written += take;
+        if (b.toWrite <= 1e-9) {
+          q.shift();
+          this.creditCompleted(b);
+          latencies.push(t - b.createdTick);
+          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, poisoned: b.poisoned, extraTicks: b.extraTicks, createdTick: b.createdTick });
+          this.totals.bundlesCompleted++;
+          this.events.push({ type: 'written', size: b.size });
+        }
+      }
+      this.totals.written += written;
+      return { written, latencies };
+    }
+
+    // Move finished bundles from blocked workers into the writer buffer while
+    // there is room, choosing by the configured intake policy.
+    admitToWriter() {
+      const cap = this.config.writerCapacity, q = this.writer.queue;
+      if (q.length >= cap) return 0;
+      const waiting = this.workers.filter(w => w.bundle && w.bundle.finished);
+      if (!waiting.length) return 0;
+      const policy = this.config.writerIntake;
+      if (policy === 'fifo') waiting.sort((a, b) => (a.bundle.finishedTick - b.bundle.finishedTick) || (a.id - b.id));
+      else if (policy === 'lowestIndex') waiting.sort((a, b) => a.id - b.id);
+      let n = 0;
+      while (q.length < cap && waiting.length) {
+        const k = policy === 'random' ? this.rng.int(waiting.length) : 0;
+        const w = waiting.splice(k, 1)[0];
+        const b = w.bundle;
+        w.bundle = null;
+        b.writerTick = this.tick;
+        q.push(b);
+        this.events.push({ type: 'complete', worker: w.id, size: b.size });
+        n++;
+      }
+      return n;
+    }
+
     // ---------- the tick ----------
     step() {
       const cfg = this.config;
@@ -647,6 +705,11 @@
       this.totals.arrived += arrivals;
       this.addArrivals(mods.holdArrivals ? this.held : this.intake, arrivals);
 
+      // 1b. Writer: write out buffered bundles, then admit finished bundles
+      //     from blocked workers into the freed slots
+      const wr = this.drainWriter();
+      this.admitToWriter();
+
       // 2. Dispatch what was already queued, then bundle while the dispatcher
       //    has room, handing bundles straight through to idle workers.
       let dispatched = this.dispatchQueued();
@@ -664,8 +727,8 @@
       }
 
       // 3. Processing: one bundle per worker
-      let processed = 0, busy = 0, offline = 0, slowed = 0, stalled = 0;
-      const latencies = [];
+      let processed = 0, busy = 0, offline = 0, slowed = 0, stalled = 0, blocked = 0;
+      const latencies = wr.latencies;
       for (const w of this.workers) {
         if (w.offlineUntil >= t) {
           offline++; w.lastRate = 0; w.lastWorked = 0;
@@ -678,6 +741,7 @@
         w.lastWorked = 0;
         const b = w.bundle;
         if (!b) continue;
+        if (b.finished) { blocked++; w.lastRate = 0; continue; } // waiting for the writer
         busy++;
         // stalled on an expensive conversion: the stall burns wall-clock ticks
         // (a degraded worker burns them proportionally slower)
@@ -702,16 +766,17 @@
         w.processed += take;
         processed += take;
         if (b.remaining <= 1e-9) {
-          w.bundle = null;
+          // processing done: the bundle now waits for the writer. The worker
+          // keeps holding it (blocked) until the writer buffer takes it.
+          b.finished = true;
+          b.finishedTick = t;
+          b.toWrite = b.size;
           w.completed++;
-          this.creditCompleted(b);
-          latencies.push(t - b.createdTick);
-          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, poisoned: b.poisoned, extraTicks: b.extraTicks, createdTick: b.createdTick });
-          this.totals.bundlesCompleted++;
-          this.events.push({ type: 'complete', worker: w.id });
         }
       }
       this.totals.processed += processed;
+      // hand this tick's finished bundles to the writer if it has room
+      this.admitToWriter();
 
       if (!this.fresh || t % COHORT_TICKS === 0) {
         this.fresh = this.freshTimes();
@@ -719,7 +784,7 @@
       }
       this.pruneCompletions();
 
-      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled);
+      const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled, blocked, wr.written);
       this.history.push(snap);
       if (this.history.length > cfg.historyLength) this.history.shift();
       this.last = snap;
@@ -734,13 +799,13 @@
       return expectedBundleTicksCached(cfg.dist, cfg.bundleSize) + cfg.bundleSize * cfg.expensiveFraction * cfg.expensiveCost;
     }
 
-    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled) {
+    snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled, blocked, written) {
       const t = this.tick;
-      let inProgress = 0, workerItems = 0, oldest = null, maxAge = 0;
+      let inProgress = 0, workerItems = 0, blockedItems = 0, oldest = null, maxAge = 0;
       for (const w of this.workers) {
         if (!w.bundle) continue;
-        inProgress += w.bundle.remaining;
-        workerItems += w.bundle.size; // nothing is written out until the bundle completes
+        if (w.bundle.finished) blockedItems += w.bundle.size; // processed, waiting for the writer
+        else { inProgress += w.bundle.remaining; workerItems += w.bundle.size; }
         if (oldest === null || w.bundle.createdTick < oldest) oldest = w.bundle.createdTick;
         const age = t - w.bundle.dispatchedTick;
         if (age > maxAge) maxAge = age;
@@ -750,20 +815,30 @@
         queuedItems_ += b.remaining;
         if (oldest === null || b.createdTick < oldest) oldest = b.createdTick;
       }
+      let writerItems = 0;
+      for (const b of this.writer.queue) {
+        writerItems += b.toWrite;
+        if (oldest === null || b.createdTick < oldest) oldest = b.createdTick;
+      }
       if (this.intake.items > 0 && (oldest === null || this.intake.oldestTick < oldest)) oldest = this.intake.oldestTick;
       if (this.held.items > 0 && (oldest === null || this.held.oldestTick < oldest)) oldest = this.held.oldestTick;
       latencies.sort((a, b) => a - b);
       const pct = p => latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(p * latencies.length))] : null;
       const n = this.workers.length;
       const bundleTicks = this.expectedBundleTicks();
-      const capacity = (n * this.config.bundleSize) / bundleTicks;
+      const workerCapacity = (n * this.config.bundleSize) / bundleTicks;
+      const capacity = Math.min(workerCapacity, this.config.writeRate);
       offline = offline || 0;
       return {
         tick: t,
-        arrivals, dispatched, processed, cut: cut || 0,
-        backlogItems: inProgress + queuedItems_ + this.intake.items + this.held.items,
+        arrivals, dispatched, processed, written: written || 0, cut: cut || 0,
+        backlogItems: inProgress + queuedItems_ + this.intake.items + this.held.items + writerItems + blockedItems,
         inProgressItems: inProgress,
         workerItems,                 // conversions inside bundles being processed (not yet written out)
+        blockedItems,                // processed bundles stuck on workers waiting for the writer
+        writerItems,                 // conversions in the writer buffer not yet written
+        writerQueued: this.writer.queue.length,
+        writerCapacity: this.config.writerCapacity,
         dispatcherItems: queuedItems_,
         dispatcherQueued: this.dispatcher.length,
         dispatcherCapacity: this.config.dispatcherCapacity,
@@ -779,9 +854,10 @@
         inflight90: this.inflight ? this.inflight[90] : 0,
         inflight99: this.inflight ? this.inflight[99] : 0,
         completedBundles: latencies.length,
-        busy, offline, slowed: slowed || 0, stalled: stalled || 0, idle: n - busy - offline,
+        busy, offline, slowed: slowed || 0, stalled: stalled || 0, blocked: blocked || 0, idle: n - busy - offline - (blocked || 0),
         utilization: n - offline > 0 ? busy / (n - offline) : 0,
         expectedBundleTicks: bundleTicks,
+        workerCapacity,
         nominalCapacity: capacity,
         load: this.config.arrivalRate / Math.max(1e-9, capacity),
       };

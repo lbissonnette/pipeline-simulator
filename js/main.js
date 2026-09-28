@@ -71,8 +71,10 @@
         return (v * 100).toFixed(3) + '%';
       case 'expensiveCost': case 'expensiveCostSd':
         return fmtMinutes(v);
-      case 'arrivalRate': case 'bundleSize': case 'workers': case 'dispatcherCapacity':
+      case 'arrivalRate': case 'bundleSize': case 'workers': case 'dispatcherCapacity': case 'writerCapacity':
         return fmtInt(v);
+      case 'writeRate':
+        return fmtInt(v) + ' / tick';
       case 'dist.mean': case 'dist.sd':
         return Number.isInteger(v) ? String(v) : v.toFixed(v < 5 ? 2 : 1).replace(/\.?0+$/, '');
       case 'bundleMaxWait':
@@ -104,6 +106,7 @@
     geom = null;
     updateDegradeWarning();
     $('#arrival-rate-s').textContent = fmtInt(partial.arrivalRate / TICK_SECONDS);
+    $('#write-rate-s').textContent = fmtInt(partial.writeRate / TICK_SECONDS);
     const perBundle = partial.bundleSize * partial.expensiveFraction;
     $('#expensive-per-bundle').textContent = perBundle.toFixed(2);
     $('#expensive-extra').textContent = fmtDur(perBundle * partial.expensiveCost);
@@ -260,14 +263,15 @@
 
   function updateCapacity() {
     const ticks = bundleTicks();
-    const cap = (sim.workers.length * sim.config.bundleSize) / ticks;
+    const workerCap = (sim.workers.length * sim.config.bundleSize) / ticks;
+    const cap = Math.min(workerCap, sim.config.writeRate);
     $('#bundle-ticks').textContent = fmtDur(ticks);
-    $('#capacity').textContent = fmtInt(cap);
+    $('#capacity').textContent = fmtInt(cap) + (cap < workerCap ? ' (writer-bound)' : '');
     const rho = sim.config.arrivalRate / Math.max(1e-9, cap);
     const rhoEl = $('#rho');
     rhoEl.textContent = rho.toFixed(2);
     rhoEl.style.color = rho >= 1 ? cssVar('--critical') : '';
-    $('#kpi-cap').textContent = `of ${fmtInt(cap)} capacity`;
+    $('#kpi-cap').textContent = `written per tick · of ${fmtInt(cap)} capacity`;
   }
 
   // ---------- simulation loop ----------
@@ -323,12 +327,13 @@
     const ox = gridX + (gridW - usedW) / 2, oy = gridY + (gridH - usedH) / 2;
     geom = {
       n, dpr, W, H, cols, rows, cell, gap, ox, oy, narrow, sideW,
-      source: narrow ? { x: W * 0.14, y: 38 } : { x: sideW / 2, y: H * 0.15 },
-      bundler: narrow ? { x: W * 0.38, y: 38 } : { x: sideW / 2, y: H * 0.5 },
-      dispatcher: narrow ? { x: W * 0.62, y: 38 } : { x: sideW / 2, y: H * 0.85 },
-      sink: narrow ? { x: W * 0.86, y: 38 } : { x: W - sideW / 2, y: H * 0.5 },
+      source: narrow ? { x: W * 0.1, y: 38 } : { x: sideW / 2, y: H * 0.15 },
+      bundler: narrow ? { x: W * 0.3, y: 38 } : { x: sideW / 2, y: H * 0.5 },
+      dispatcher: narrow ? { x: W * 0.5, y: 38 } : { x: sideW / 2, y: H * 0.85 },
+      writer: narrow ? { x: W * 0.7, y: 38 } : { x: W - sideW / 2, y: H * 0.3 },
+      sink: narrow ? { x: W * 0.9, y: 38 } : { x: W - sideW / 2, y: H * 0.7 },
     };
-    NODE_R = narrow ? 28 : 34;
+    NODE_R = narrow ? 24 : 34;
     return geom;
   }
 
@@ -339,12 +344,18 @@
   }
 
   // Endpoints of the arrow from the worker pool to Done.
-  function poolToSink(g) {
+  // pool -> writer arrow (finished bundles), and writer -> Done arrow (written data)
+  function poolToWriter(g) {
     const R = NODE_R;
-    if (g.narrow) return { from: { x: g.sink.x, y: g.oy - 6 }, to: { x: g.sink.x, y: g.sink.y + R } };
+    if (g.narrow) return { from: { x: g.writer.x, y: g.oy - 6 }, to: { x: g.writer.x, y: g.writer.y + R } };
     const gridRight = g.ox + g.cols * (g.cell + g.gap) - g.gap;
     const gridMidY = g.oy + (g.rows * (g.cell + g.gap) - g.gap) / 2;
-    return { from: { x: gridRight + 6, y: gridMidY }, to: { x: g.sink.x - R, y: g.sink.y } };
+    return { from: { x: gridRight + 6, y: gridMidY }, to: { x: g.writer.x - R, y: g.writer.y } };
+  }
+  function writerToSink(g) {
+    const R = NODE_R;
+    if (g.narrow) return { from: { x: g.writer.x + R, y: g.writer.y }, to: { x: g.sink.x - R, y: g.sink.y } };
+    return { from: { x: g.writer.x, y: g.writer.y + R }, to: { x: g.sink.x, y: g.sink.y - R } };
   }
 
   function spawnParticles(events, snap) {
@@ -374,11 +385,13 @@
       const from = g.narrow ? edge(g.dispatcher, 'down') : edge(g.dispatcher, 'out');
       particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 8, dur, kind: 'in' });
     }
-    // completions travel along the pool -> Done arrow, not from each worker
-    const out = poolToSink(g);
+    // finished bundles travel along the pool -> Writer arrow, written data along Writer -> Done
+    const out = poolToWriter(g), fin = writerToSink(g);
     for (const [i] of sample(events.filter(e => e.type === 'complete'), 24).entries()) {
-      const { from, to } = out;
-      particles.push({ x0: from.x, y0: from.y, x1: to.x, y1: to.y, t0: now + i * 10, dur, kind: 'out' });
+      particles.push({ x0: out.from.x, y0: out.from.y, x1: out.to.x, y1: out.to.y, t0: now + i * 10, dur, kind: 'out' });
+    }
+    for (const [i] of sample(events.filter(e => e.type === 'written'), 12).entries()) {
+      particles.push({ x0: fin.from.x, y0: fin.from.y, x1: fin.to.x, y1: fin.to.y, t0: now + i * 12, dur: dur * 0.6, kind: 'out' });
     }
     // arrivals: a steady trickle, doubled during a spike
     const arr = snap.arrivals <= 0 ? 0 : snap.arrivals > 1.5 * sim.config.arrivalRate ? 2 : 1;
@@ -404,7 +417,7 @@
       surface: cssVar('--surface'), surface2: cssVar('--surface-2'), border: cssVar('--border'),
       ink: cssVar('--text'), ink2: cssVar('--text-2'), axis: cssVar('--axis'), critical: cssVar('--critical'),
       idle: cssVar('--cell-idle'), offline: cssVar('--cell-offline'), offlineInk: cssVar('--cell-offline-ink'),
-      s1: cssVar('--s1'), s2: cssVar('--s2'), good: cssVar('--good'),
+      s1: cssVar('--s1'), s2: cssVar('--s2'), good: cssVar('--good'), s5: cssVar('--s5'),
     };
   }
 
@@ -448,10 +461,11 @@
     } else {
       drawArrow(ctx, g.source.x + r, g.source.y, g.bundler.x - r, g.bundler.y, C.axis);
       drawArrow(ctx, g.bundler.x + r, g.bundler.y, g.dispatcher.x - r, g.dispatcher.y, C.axis);
-      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.sink.x - r, g.sink.y, C.axis);
+      drawArrow(ctx, g.dispatcher.x + r, g.dispatcher.y, g.writer.x - r, g.writer.y, C.axis);
     }
-    const out = poolToSink(g);
+    const out = poolToWriter(g), fin = writerToSink(g);
     drawArrow(ctx, out.from.x, out.from.y, out.to.x, out.to.y, C.axis);
+    drawArrow(ctx, fin.from.x, fin.from.y, fin.to.x, fin.to.y, C.axis);
     const holding = snap.heldItems > 0;
     const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
     const blocked = full && snap.intakeItems >= sim.config.bundleSize;
@@ -468,7 +482,15 @@
       ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
       ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
     }
-    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.processed)} total`, `${fmt(snap.processed)} / tick`],
+    const writerFull = snap.writerQueued >= snap.writerCapacity;
+    drawNode(ctx, g.writer.x, g.writer.y, r, 'Writer',
+      [`${fmt(snap.writerQueued)} / ${fmt(snap.writerCapacity)} buffered`, snap.blocked ? `${fmt(snap.blocked)} blocked` : `${fmt(snap.written)} / tick`],
+      writerFull ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    if (writerFull) {
+      ctx.beginPath(); ctx.arc(g.writer.x, g.writer.y, r + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
+    }
+    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.written)} total`, `${fmt(snap.written)} / tick`],
       C.surface, C.ink, C.ink2, C.border);
 
     // worker grid
@@ -503,6 +525,7 @@
         const bh = Math.max(2, Math.round(cell * 0.14));
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fillRect(x + 1, y + cell - bh - 1, Math.round((cell - 2) * p), bh);
+        if (b.finished) { ctx.fillStyle = C.s5; ctx.fillRect(x + 1, y + 1, cell - 2, bh); } // waiting for the writer
         if (b.stallLeft > 0 && b.stallPoison && !offline) {
           const d = Math.max(3, Math.round(cell * 0.3));
           ctx.fillStyle = C.s2;
@@ -581,7 +604,7 @@
     const offline = w.offlineUntil >= sim.tick;
     const b = w.bundle;
     const df = offline ? 0 : sim.degradeFactor(w);
-    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : df < 1 ? ` · slowed ×${df.toFixed(2)}` : b ? '' : ' · idle'}</div>` +
+    tooltip.innerHTML = `<div class="tt-title">Worker ${idx + 1}${offline ? ' · offline' : b && b.finished ? ' · finished, waiting for the writer' : df < 1 ? ` · slowed ×${df.toFixed(2)}` : b ? '' : ' · idle'}</div>` +
       (b ? `<div class="tt-row"><span>Current bundle</span><b>${Math.round(100 * (1 - b.remaining / b.size))}% done · ${fmt(b.remaining)} left</b></div>` +
            `<div class="tt-row"><span>Working for</span><b>${fmtDur(sim.tick - b.dispatchedTick)} · data aged ${fmtDur(sim.tick - b.createdTick)}</b></div>` +
            `<div class="tt-row"><span>Expensive conversions</span><b>${b.expensive}${b.poisoned ? ` (${b.poisoned} of death)` : ''}${b.stallLeft > 0 ? ` · stalled, ${fmtDur(b.stallLeft)} left` : b.stalls.length ? ` · ${b.stalls.length} ahead` : ''}</b></div>` : '') +
@@ -614,6 +637,7 @@
         { key: 'stackDispatcher', rawKey: 'dispatcherItems', name: 'dispatcher', color: '--s2' },
         { key: 'stackBundler', rawKey: 'intakeItems', name: 'bundler', color: '--s3' },
         { key: 'stackUpstream', rawKey: 'heldItems', name: 'upstream', color: '--s4' },
+        { key: 'stackWriter', rawKey: 'writerStage', name: 'writer', color: '--s5' },
       ],
     })),
     inflight: new LineChart($('#chart-inflight'), Object.assign({}, timeOpts, {
@@ -819,8 +843,8 @@
     for (let i = start; i < history.length; i++) {
       const h = history[i];
       if (h.tick <= st.lastTick) continue;
-      st.q.push(h); st.sa += h.arrivals; st.sp += h.processed;
-      if (st.q.length > AVG_WIN) { const d = st.q.shift(); st.sa -= d.arrivals; st.sp -= d.processed; }
+      st.q.push(h); st.sa += h.arrivals; st.sp += (h.written || 0);
+      if (st.q.length > AVG_WIN) { const d = st.q.shift(); st.sa -= d.arrivals; st.sp -= (d.written || 0); }
       st.latQ.push(h.latencies); st.latCount += h.latencies.length;
       if (st.latQ.length > LAT_WIN) st.latCount -= st.latQ.shift().length;
       if (st.latCount >= 5 && h.tick % 3 === 0) {
@@ -831,10 +855,11 @@
         st.p50 = at(0.5); st.p90 = at(0.9); st.p99 = at(0.99);
       } else if (st.latCount < 5) { st.p50 = null; st.p90 = null; st.p99 = null; }
       const wk = h.workerItems || 0, dq = h.dispatcherItems || 0, bu = h.intakeItems || 0, up = h.heldItems || 0;
+      const wrs = (h.writerItems || 0) + (h.blockedItems || 0); // buffered or finished-but-blocked
       st.rows.push({
         tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
-        workerItems: wk, dispatcherItems: dq, intakeItems: bu, heldItems: up,
-        stackWorkers: wk, stackDispatcher: wk + dq, stackBundler: wk + dq + bu, stackUpstream: wk + dq + bu + up,
+        workerItems: wk, dispatcherItems: dq, intakeItems: bu, heldItems: up, writerStage: wrs,
+        stackWorkers: wk, stackDispatcher: wk + dq, stackBundler: wk + dq + bu, stackUpstream: wk + dq + bu + up, stackWriter: wk + dq + bu + up + wrs,
         dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
         arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
         latP50Hr: st.p50, latP90Hr: st.p90, latP99Hr: st.p99,
@@ -876,7 +901,11 @@
     $('#kpi-in').textContent = last ? fmt(last.arrivals) : '0';
     $('#kpi-out').textContent = last ? fmt(last.processed) : '0';
     $('#kpi-busy').textContent = Math.round(snap.utilization * 100) + '%';
-    $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.stalled ? `${fmtInt(snap.stalled)} stalled` : null, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
+    $('#kpi-workers').textContent = [`${fmtInt(snap.idle)} idle`, snap.stalled ? `${fmtInt(snap.stalled)} stalled` : null, snap.slowed ? `${fmtInt(snap.slowed)} slowed` : null, snap.blocked ? `${fmtInt(snap.blocked)} blocked` : null, `${fmtInt(snap.offline)} offline`].filter(Boolean).join(' · ');
+    const wq = $('#kpi-writer');
+    wq.textContent = `${fmtInt(snap.writerQueued)} / ${fmtInt(snap.writerCapacity)}`;
+    wq.classList.toggle('warn', snap.writerQueued >= snap.writerCapacity);
+    $('#kpi-writer-sub').textContent = snap.blocked ? `${fmtInt(snap.blocked)} blocked workers` : `${fmt(snap.written)} written per tick`;
     const dq = $('#kpi-dispatcher');
     dq.textContent = `${fmtInt(snap.dispatcherQueued)} / ${fmtInt(snap.dispatcherCapacity)}`;
     dq.classList.toggle('warn', snap.dispatcherQueued >= snap.dispatcherCapacity);

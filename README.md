@@ -3,7 +3,7 @@
 An interactive, dependency-free simulation of a streaming conversion pipeline.
 Conversions (sign-ups, purchases after an ad) arrive at a configurable rate, are
 cut into bundles, queue at a bounded dispatcher, and are handed one at a time to
-a pool of 1,024 identical workers. Each tick (10 seconds) every busy worker
+a pool of 1,024 identical workers and then a buffered writer. Each tick (10 seconds) every busy worker
 completes a random number of conversions, drawn from a distribution you
 control, and a small share of expensive conversions add stalls; with the
 defaults a bundle takes a median of about 23 minutes end to end. Turn the knobs, inject delays, and
@@ -71,6 +71,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Daily traffic wave | Sinusoidal modulation of the arrival rate over 24 h (± percent). |
 | Dispatcher | Queue capacity | Bundles the dispatcher can hold (default 1,024). When full, the bundler stops cutting bundles. |
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
+| Writer | Write rate | Conversions the writer can write per tick (default 9,000, about 900 per second). |
+| | Buffer capacity | Finished bundles the writer can hold (default 256). When full, workers that finish a bundle are blocked until a slot frees. |
+| | Intake | Which blocked worker is admitted when a slot frees: FIFO (finished earliest), lowest worker index, or random. |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
 | | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
@@ -118,15 +121,20 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    defaults (0.15%, 2 ± 3 min, about 1.8 per bundle) add 3.6 ± 4.8 min on top
    of the 20-minute base, giving an end-to-end median of ~23 min, p90 ~30 min,
    p99 ~45 min.
-6. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
+6. **Writer**: a finished bundle goes to a buffered writer and is written out
+   in order at the configured rate. It counts as complete only once fully
+   written, so completeness, fresh time and latency all measure to write-out.
+   If the buffer is full, the worker holding the finished bundle is blocked
+   until a slot frees; the intake policy picks which blocked worker goes next.
+7. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
    expected ticks are the rate-driven part (estimated by simulation) plus the
    mean stall time. With the defaults that is ~8,600 conversions per tick. The load ratio
    ρ = arrivals ÷ capacity is shown live; above 1 the dispatcher pins at its
    capacity and the backlog grows without bound at the bundler.
-7. **Latency** of a bundle is measured from the tick its oldest conversion
+8. **Latency** of a bundle is measured from the tick its oldest conversion
    arrived to the tick it finished, so it includes time spent filling the
    bundle, waiting at the bundler and in the dispatcher, and being processed.
-8. **Arrival cohorts**: every conversion is tagged with the minute it arrived
+9. **Arrival cohorts**: every conversion is tagged with the minute it arrived
    in, through the intake buffer (and the upstream-delay hold) into its bundle.
    A bundle is written out atomically, so its cohorts are credited only when
    the whole bundle completes. `Simulation#completeness(n)`
