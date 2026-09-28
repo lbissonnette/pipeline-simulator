@@ -1051,6 +1051,25 @@
     }
   }
 
+  // PDF / CDF toggles on the distribution charts (remembered per chart)
+  const STORE_DIST = 'pipeline-sim.dist-mode';
+  const distCharts = { 'chart-hist': histChart, 'chart-inflight-hist': inflightHist };
+  function setDistMode(id, mode, persist) {
+    const chart = distCharts[id];
+    if (!chart) return;
+    chart.mode = mode;
+    for (const btn of document.querySelectorAll(`[data-dist-toggle="${id}"] button`)) btn.classList.toggle('on', btn.dataset.mode === mode);
+    if (persist) { const m = store.get(STORE_DIST) || {}; m[id] = mode; store.set(STORE_DIST, m); render(true); }
+  }
+  for (const seg of document.querySelectorAll('[data-dist-toggle]')) {
+    seg.addEventListener('click', e => {
+      const btn = e.target.closest('button[data-mode]');
+      if (btn) setDistMode(seg.dataset.distToggle, btn.dataset.mode, true);
+    });
+  }
+  const savedModes = store.get(STORE_DIST) || {};
+  for (const id of Object.keys(distCharts)) if (savedModes[id] === 'cdf') setDistMode(id, 'cdf', false);
+
   // ---------- boot ----------
   initCards();
   buildRamp();

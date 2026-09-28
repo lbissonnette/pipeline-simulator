@@ -249,6 +249,7 @@
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>% of conversions not yet written out, by age</span>
             <span class="unit" id="inflight-hist-note"><b class="num" id="inflight-total">–</b> conversions in flight</span>
+            <span class="seg" data-dist-toggle="chart-inflight-hist" role="group" aria-label="Distribution view"><button type="button" data-mode="pdf" class="on" title="Share of conversions in each age bin">PDF</button><button type="button" data-mode="cdf" title="Share of conversions at or below each age">CDF</button></span>
           </div>
         </div>
         <div class="chart-wrap"><canvas id="chart-inflight-hist"></canvas></div>
@@ -270,6 +271,7 @@
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>last 12 h</span>
             <span class="lg-item"><i class="sw s2 outline"></i>last 7 d</span>
+            <span class="seg" data-dist-toggle="chart-hist" role="group" aria-label="Distribution view"><button type="button" data-mode="pdf" class="on" title="Share of conversions in each processing-time bin">PDF</button><button type="button" data-mode="cdf" title="Share of conversions processed within each time">CDF</button></span>
             <span class="unit" id="hist-note">12 h: p50 <b class="num" id="hist-12h-p50">–</b> · p95 <b class="num" id="hist-12h-p95">–</b> &nbsp;|&nbsp; 7 d: p50 <b class="num" id="hist-7d-p50">–</b> · p95 <b class="num" id="hist-7d-p95">–</b></span>
           </div>
         </div>
@@ -324,6 +326,7 @@
       <summary>How the model works</summary>
       <ul>
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
+        <li><b>PDF / CDF</b>: the two distribution charts can show either the share of conversions in each bin (PDF, the histogram) or the cumulative share at or below each value (CDF, rising to 100%). The choice is remembered per chart.</li>
         <li><b>Layout</b>: every chart card has a Hide button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The arrangement is remembered in this browser.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>

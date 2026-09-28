@@ -169,6 +169,10 @@ button, input, select { font: inherit; color: inherit; }
 .card-head .grip { cursor: grab; color: var(--text-muted); font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; user-select: none; touch-action: none; }
 .card-head .grip:hover { background: var(--surface-2); color: var(--text); }
 .card-head .btn.tiny { padding: 2px 8px; font-size: 12px; line-height: 1.4; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface-2); color: var(--text-2); font-size: 11px; padding: 2px 8px; cursor: pointer; line-height: 1.5; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
 .card.collapsed .chart-wrap, .card.collapsed .legend, .card.collapsed .unit, .card.collapsed .stage-wrap { display: none; }
 .card.collapsed { padding-bottom: 8px; }
 .card.collapsed .card-head { margin-bottom: 0; }

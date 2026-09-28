@@ -264,6 +264,7 @@
       this.xLabel = opts.xLabel || (v => String(v));
       this.xTicks = opts.xTicks || null; // (x0, x1) => [{ value, label }]
       this.countLabel = opts.countLabel || 'count';
+      this.mode = opts.mode || 'pdf';   // 'pdf': share per bin as bars; 'cdf': cumulative share as step curves
       this.data = { bins: [], series: [] };
       this.hoverIndex = null;
       this.tooltip = document.createElement('div');
@@ -291,9 +292,13 @@
       this.hoverIndex = idx;
       this.draw();
       const b = bins[idx];
-      let html = `<div class="tt-title">${b.overflow ? this.xLabel(b.x0) + ' and above' : this.xLabel(b.x0) + ' – ' + this.xLabel(b.x1)}</div>`;
+      const cdf = this.mode === 'cdf';
+      let html = cdf
+        ? `<div class="tt-title">${b.overflow ? 'all' : 'up to ' + this.xLabel(b.x1)}</div>`
+        : `<div class="tt-title">${b.overflow ? this.xLabel(b.x0) + ' and above' : this.xLabel(b.x0) + ' – ' + this.xLabel(b.x1)}</div>`;
       for (const s of series) {
-        const v = s.values[idx], c = s.counts ? s.counts[idx] : null;
+        let v = s.values[idx], c = s.counts ? s.counts[idx] : null;
+        if (cdf) { v = 0; c = s.counts ? 0 : null; for (let k = 0; k <= idx; k++) { v += s.values[k]; if (c !== null) c += s.counts[k]; } v = Math.min(100, v); }
         html += `<div class="tt-row"><span class="tt-swatch" style="background:${this.color(s)}"></span><span>${s.name}</span><b>${v.toFixed(1)}%${c !== null ? ` · ${fmt(c)} ${this.countLabel}` : ''}</b></div>`;
       }
       this.tooltip.innerHTML = html;
@@ -318,11 +323,17 @@
       const grid = cssVar('--grid'), axis = cssVar('--axis'), muted = cssVar('--text-muted'), surface = cssVar('--surface');
       ctx.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
 
+      const cdf = this.mode === 'cdf';
+      // in CDF mode plot cumulative shares (0..100); in PDF mode the per-bin shares
+      const plotted = cdf
+        ? series.map(s => { let acc = 0; return Object.assign({}, s, { values: s.values.map(v => (acc = Math.min(100, acc + v))) }); })
+        : series;
       let maxY = 0;
-      for (const s of series) for (const v of s.values) if (v > maxY) maxY = v;
+      if (cdf) maxY = 100;
+      else for (const s of plotted) for (const v of s.values) if (v > maxY) maxY = v;
       if (maxY <= 0) maxY = 1;
-      const step = niceStep(maxY, 4);
-      const yMax = Math.ceil(maxY / step) * step;
+      const step = cdf ? 25 : niceStep(maxY, 4);
+      const yMax = cdf ? 100 : Math.ceil(maxY / step) * step;
       const yOf = v => t + ph - (v / yMax) * ph;
 
       ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.lineWidth = 1;
@@ -343,11 +354,12 @@
       }
 
       // bars per series: the first is a translucent fill, later ones are drawn
-      // as outlined step shapes so both stay readable where they overlap
+      // as outlined step shapes so both stay readable where they overlap.
+      // In CDF mode every series is a step curve.
       const gap = 1;
-      series.forEach((s, si) => {
+      plotted.forEach((s, si) => {
         const col = this.color(s);
-        if (si === 0) {
+        if (si === 0 && !cdf) {
           ctx.fillStyle = col; ctx.globalAlpha = 0.35;
           bins.forEach((bn, i) => {
             const v = s.values[i]; if (v <= 0) return;
@@ -357,12 +369,15 @@
           ctx.globalAlpha = 1;
         } else {
           ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round';
-          ctx.fillStyle = col; ctx.globalAlpha = 0.15;
-          ctx.beginPath();
-          ctx.moveTo(xOf(bins[0].x0), yOf(0));
-          bins.forEach((bn, i) => { const y = yOf(s.values[i]); ctx.lineTo(xOf(bn.x0), y); ctx.lineTo(xOf(bn.x1), y); });
-          ctx.lineTo(xOf(x1), yOf(0));
-          ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+          // a light fill under the first series only, so overlapping curves stay readable
+          if (si === 0) {
+            ctx.fillStyle = col; ctx.globalAlpha = 0.15;
+            ctx.beginPath();
+            ctx.moveTo(xOf(bins[0].x0), yOf(0));
+            bins.forEach((bn, i) => { const y = yOf(s.values[i]); ctx.lineTo(xOf(bn.x0), y); ctx.lineTo(xOf(bn.x1), y); });
+            ctx.lineTo(xOf(x1), yOf(0));
+            ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+          }
           ctx.beginPath();
           bins.forEach((bn, i) => { const y = yOf(s.values[i]); if (i === 0) ctx.moveTo(xOf(bn.x0), y); else ctx.lineTo(xOf(bn.x0), y); ctx.lineTo(xOf(bn.x1), y); });
           ctx.stroke();
@@ -374,7 +389,7 @@
         ctx.fillStyle = cssVar('--text'); ctx.globalAlpha = 0.08;
         ctx.fillRect(xOf(bn.x0), t, xOf(bn.x1) - xOf(bn.x0), ph);
         ctx.globalAlpha = 1;
-        for (const s of series) {
+        for (const s of plotted) {
           const v = s.values[this.hoverIndex];
           const cx = (xOf(bn.x0) + xOf(bn.x1)) / 2, cy = yOf(v);
           ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fillStyle = surface; ctx.fill();
