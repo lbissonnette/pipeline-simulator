@@ -333,7 +333,7 @@
       writer: narrow ? { x: W * 0.7, y: 38 } : { x: W - sideW / 2, y: H * 0.3 },
       sink: narrow ? { x: W * 0.9, y: 38 } : { x: W - sideW / 2, y: H * 0.7 },
     };
-    NODE_R = narrow ? 24 : 34;
+    NODE_R = narrow ? 24 : 42;
     return geom;
   }
 
@@ -421,15 +421,29 @@
     };
   }
 
+  // Draw a line of text centred at (x, y) that fits within maxW: shrink the
+  // font down to 8px first, then truncate with an ellipsis.
+  function fitText(ctx, text, x, y, maxW, size, weight) {
+    let px = size;
+    const font = n => `${weight ? weight + ' ' : ''}${n}px system-ui, sans-serif`;
+    ctx.font = font(px);
+    while (ctx.measureText(text).width > maxW && px > 8) { px -= 1; ctx.font = font(px); }
+    let t = text;
+    while (t.length > 2 && ctx.measureText(t).width > maxW) t = t.slice(0, -2).trimEnd() + '…';
+    ctx.fillText(t, x, y);
+  }
   function drawNode(ctx, x, y, r, title, lines, fillColor, ink, ink2, border) {
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = fillColor; ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = border; ctx.stroke();
-    ctx.fillStyle = ink; ctx.font = `600 ${title.length > 8 ? 11 : 12}px system-ui, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(title, x, y - (lines.length ? 8 : 0));
-    ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = ink2;
-    lines.forEach((l, i) => ctx.fillText(l, x, y + 7 + i * 13));
+    const maxW = 2 * r - 12;
+    const lineH = r >= 40 ? 13 : 12;
+    const titleY = lines.length ? y - (lines.length * lineH) / 2 : y;
+    ctx.fillStyle = ink;
+    fitText(ctx, title, x, titleY, maxW, 12, '600');
+    ctx.fillStyle = ink2;
+    lines.forEach((l, i) => fitText(ctx, l, x, titleY + (i + 1) * lineH, maxW, 11));
   }
 
   function drawArrow(ctx, x0, y0, x1, y1, color) {
@@ -466,32 +480,6 @@
     const out = poolToWriter(g), fin = writerToSink(g);
     drawArrow(ctx, out.from.x, out.from.y, out.to.x, out.to.y, C.axis);
     drawArrow(ctx, fin.from.x, fin.from.y, fin.to.x, fin.to.y, C.axis);
-    const holding = snap.heldItems > 0;
-    const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
-    const blocked = full && snap.intakeItems >= sim.config.bundleSize;
-    drawNode(ctx, g.source.x, g.source.y, r, 'Source',
-      holding ? [`holding ${fmt(snap.heldItems)}`, 'delayed'] : [`${fmt(snap.arrivals)} / tick`],
-      holding ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
-    drawNode(ctx, g.bundler.x, g.bundler.y, r, 'Bundler',
-      [`${fmt(snap.intakeItems)} held`, blocked ? 'blocked' : `${snap.cut} cut`],
-      blocked ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
-    drawNode(ctx, g.dispatcher.x, g.dispatcher.y, r, 'Dispatcher',
-      [`${snap.dispatcherQueued} / ${snap.dispatcherCapacity} queued`, `${snap.dispatched} sent`],
-      full ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
-    if (full) {
-      ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
-      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
-    }
-    const writerFull = snap.writerQueued >= snap.writerCapacity;
-    drawNode(ctx, g.writer.x, g.writer.y, r, 'Writer',
-      [`${fmt(snap.writerQueued)} / ${fmt(snap.writerCapacity)} buffered`, snap.blocked ? `${fmt(snap.blocked)} blocked` : `${fmt(snap.written)} / tick`],
-      writerFull ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
-    if (writerFull) {
-      ctx.beginPath(); ctx.arc(g.writer.x, g.writer.y, r + 2, 0, Math.PI * 2);
-      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
-    }
-    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.written)} total`, `${fmt(snap.written)} / tick`],
-      C.surface, C.ink, C.ink2, C.border);
 
     // worker grid
     const cell = g.cell, rad = Math.min(4, cell / 4);
@@ -572,6 +560,34 @@
       ctx.fillStyle = p.kind === 'out' ? C.good : C.s1; ctx.fill();
     }
     particles = alive;
+
+    // nodes last, so dots arriving at a node disappear under it rather than over its text
+    const holding = snap.heldItems > 0;
+    const full = snap.dispatcherQueued >= snap.dispatcherCapacity;
+    const blocked = full && snap.intakeItems >= sim.config.bundleSize;
+    drawNode(ctx, g.source.x, g.source.y, r, 'Source',
+      holding ? [`holding ${fmt(snap.heldItems)}`, 'delayed'] : [`${fmt(snap.arrivals)} / tick`],
+      holding ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    drawNode(ctx, g.bundler.x, g.bundler.y, r, 'Bundler',
+      [`${fmt(snap.intakeItems)} held`, blocked ? 'blocked' : `${snap.cut} cut`],
+      blocked ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    drawNode(ctx, g.dispatcher.x, g.dispatcher.y, r, 'Dispatcher',
+      [`${fmtInt(snap.dispatcherQueued)} / ${fmtInt(snap.dispatcherCapacity)}`, `${snap.dispatched} sent`],
+      full ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    if (full) {
+      ctx.beginPath(); ctx.arc(g.dispatcher.x, g.dispatcher.y, r + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
+    }
+    const writerFull = snap.writerQueued >= snap.writerCapacity;
+    drawNode(ctx, g.writer.x, g.writer.y, r, 'Writer',
+      [`${fmtInt(snap.writerQueued)} / ${fmtInt(snap.writerCapacity)}`, snap.blocked ? `${fmt(snap.blocked)} blocked` : `${fmt(snap.written)} / tick`],
+      writerFull ? C.surface2 : C.surface, C.ink, C.ink2, C.border);
+    if (writerFull) {
+      ctx.beginPath(); ctx.arc(g.writer.x, g.writer.y, r + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = C.critical; ctx.stroke();
+    }
+    drawNode(ctx, g.sink.x, g.sink.y, r, 'Done', [`${fmt(sim.totals.written)} total`, `${fmt(snap.written)} / tick`],
+      C.surface, C.ink, C.ink2, C.border);
   }
 
   const nativeRoundRect = typeof CanvasRenderingContext2D !== 'undefined' && 'roundRect' in CanvasRenderingContext2D.prototype;
