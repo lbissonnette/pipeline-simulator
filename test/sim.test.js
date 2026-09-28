@@ -316,7 +316,7 @@ test('completions are retained for the window and can be sliced by recency', () 
 
 
 test('expensive conversions: each one adds exactly its cost to the bundle', () => {
-  const sim = new Simulation({ arrivalRate: 7000, seed: 71, expensiveFraction: 0.0001, expensiveCost: 120 });
+  const sim = new Simulation({ arrivalRate: 7000, seed: 71, expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 0 });
   run(sim, 4000);
   const byK = new Map();
   for (const c of sim.latencySamples(2000)) {
@@ -337,7 +337,7 @@ test('expensive conversions: each one adds exactly its cost to the bundle', () =
 });
 
 test('expensive-tail preset: end-to-end mean ~4 h, sd ~1.2 h', () => {
-  const sim = new Simulation({ arrivalRate: 4000, seed: 72, expensiveFraction: 0.000386, expensiveCost: 258 });
+  const sim = new Simulation({ arrivalRate: 4000, seed: 72, expensiveFraction: 0.000525, expensiveCost: 192, expensiveCostSd: 114 });
   run(sim, 12000);
   const c = sim.latencySamples(6000);
   let w = 0, m = 0;
@@ -355,4 +355,30 @@ test('workers are homogeneous: no per-worker speed state', () => {
   const sim = new Simulation();
   assert.ok(sim.workers.every(w => w.speed === undefined));
   assert.equal(sim.config.heterogeneity, undefined);
+});
+
+
+test('expensive cost spread: per-conversion costs vary log-normally around the mean', () => {
+  const { sampleLognormal } = require('../js/sim.js');
+  const rng = makeRng(5);
+  let n = 20000, sum = 0, sq = 0;
+  for (let i = 0; i < n; i++) { const v = sampleLognormal(rng, 120, 60); sum += v; sq += v * v; }
+  const mean = sum / n, sd = Math.sqrt(sq / n - mean * mean);
+  assert.ok(Math.abs(mean - 120) < 2, `mean ${mean}`);
+  assert.ok(Math.abs(sd - 60) < 3, `sd ${sd}`);
+  assert.equal(sampleLognormal(rng, 120, 0), 120);
+  // in the simulation, the recorded extra time equals the sum of the drawn costs
+  const sim = new Simulation({ arrivalRate: 7000, seed: 73 });
+  run(sim, 3000);
+  const c = sim.latencySamples(1000).filter(x => x.expensive === 1);
+  assert.ok(c.length > 100);
+  const extras = c.map(x => x.extraTicks);
+  const m = extras.reduce((a, b) => a + b, 0) / extras.length;
+  const s2 = extras.reduce((a, b) => a + (b - m) ** 2, 0) / extras.length;
+  assert.ok(Math.abs(m - 120) < 10, `k=1 mean extra ${m}`);
+  assert.ok(Math.abs(Math.sqrt(s2) - 60) < 12, `k=1 sd extra ${Math.sqrt(s2)}`);
+  // and the bundle's latency tracks it: latency ≈ base + extra
+  const resid = c.map(x => x.latency - x.extraTicks);
+  const rm = resid.reduce((a, b) => a + b, 0) / resid.length;
+  assert.ok(rm > 715 && rm < 740, `base ${rm}`);
 });

@@ -62,13 +62,13 @@
   let ramp = [];
   let hoveredWorker = null;
 
-  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0001, expensiveCost: 120 };
+  const BASE = { waveAmplitude: 0, bundleSize: 7200, bundleMaxWait: 30, workers: 1000, dispatcherCapacity: 10, routing: 'lowestIdle', expensiveFraction: 0.0001, expensiveCost: 120, expensiveCostSd: 60 };
   const NORMAL = { type: 'normal', mean: 10, sd: 2.5 };
   const PRESETS = {
     healthy:    Object.assign({}, BASE, { arrivalRate: 7000, dist: NORMAL }),
     overloaded: Object.assign({}, BASE, { arrivalRate: 11000, dist: NORMAL }),
-    // 2.8 expensive conversions per bundle at 43 min each: +2 h mean, 1.2 h sd
-    expensive:  Object.assign({}, BASE, { arrivalRate: 4000, expensiveFraction: 0.000386, expensiveCost: 258, dist: NORMAL }),
+    // ~3.8 expensive conversions per bundle at 32 ± 19 min each: +2 h mean, 1.2 h sd
+    expensive:  Object.assign({}, BASE, { arrivalRate: 4000, expensiveFraction: 0.000525, expensiveCost: 192, expensiveCostSd: 114, dist: NORMAL }),
     sticky:     Object.assign({}, BASE, { arrivalRate: 7000, routing: 'sticky', dist: NORMAL }),
     bursty:     Object.assign({}, BASE, { arrivalRate: 7000, waveAmplitude: 0.6, dist: NORMAL }),
   };
@@ -80,7 +80,7 @@
         return Math.round(v * 100) + '%';
       case 'expensiveFraction':
         return (v * 100).toFixed(3) + '%';
-      case 'expensiveCost':
+      case 'expensiveCost': case 'expensiveCostSd':
         return fmtMinutes(v);
       case 'arrivalRate': case 'bundleSize': case 'workers':
         return fmtInt(v);
@@ -117,6 +117,8 @@
     const perBundle = partial.bundleSize * partial.expensiveFraction;
     $('#expensive-per-bundle').textContent = perBundle.toFixed(2);
     $('#expensive-extra').textContent = fmtDur(perBundle * partial.expensiveCost);
+    // compound Poisson: var = lambda * E[cost^2]
+    $('#expensive-extra-sd').textContent = fmtDur(Math.sqrt(perBundle * (partial.expensiveCost ** 2 + partial.expensiveCostSd ** 2)));
     $('#rate-per-s').textContent = (dist.mean / TICK_SECONDS).toFixed(2).replace(/0$/, '');
     $('.bimodal-only').hidden = dist.type !== 'bimodal';
     drawDistribution();

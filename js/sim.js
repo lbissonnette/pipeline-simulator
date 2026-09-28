@@ -98,6 +98,14 @@
   };
 
   // Conversions a worker completes this tick. Never negative.
+  // Log-normal draw with the given mean and sd (sd 0 returns the mean).
+  function sampleLognormal(rng, mean, sd) {
+    if (mean <= 0) return 0;
+    if (sd <= 0) return mean;
+    const sigma2 = Math.log(1 + (sd / mean) ** 2);
+    return Math.exp(Math.log(mean) - sigma2 / 2 + Math.sqrt(sigma2) * rng.gaussian());
+  }
+
   function sampleRate(rng, dist) {
     const impl = DISTRIBUTIONS[dist.type] || DISTRIBUTIONS.normal;
     const r = impl.sample(rng, dist);
@@ -147,7 +155,8 @@
     // Expensive conversions: a small share of conversions each cost a fixed
     // extra processing time. A bundle holding k of them stalls k x cost ticks.
     expensiveFraction: 0.0001, // share of conversions that are expensive (0.01%)
-    expensiveCost: 120,        // extra ticks per expensive conversion (20 min)
+    expensiveCost: 120,        // mean extra ticks per expensive conversion (20 min)
+    expensiveCostSd: 60,       // sd of that cost (log-normal), 10 min
     historyLength: 4320,       // 12 h
     completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
     seed: 42,
@@ -367,15 +376,18 @@
       const cfg = this.config;
       const k = cfg.expensiveFraction > 0 ? Math.min(Math.round(size), this.rng.poisson(size * cfg.expensiveFraction)) : 0;
       const stalls = [];
-      for (let i = 0; i < k; i++) stalls.push(this.rng.uniform() * size);
-      stalls.sort((x, y) => x - y);
+      for (let i = 0; i < k; i++) {
+        stalls.push({ at: this.rng.uniform() * size, cost: sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd) });
+      }
+      stalls.sort((x, y) => x.at - y.at);
       const b = {
         id: this.nextBundleId++, size, remaining: size,
         cohorts, cursor: 0,                       // cursor: index of the cohort being processed
         createdTick: cohorts.length ? cohorts[0].firstTick : this.tick,
         cutTick: this.tick, dispatchedTick: null,
         worker: cfg.routing === 'sticky' ? this.rng.int(this.workers.length) : null,
-        expensive: k, stalls, stallLeft: 0,       // stall points (offsets) and ticks left in the current stall
+        expensive: k, stalls, stallLeft: 0,       // stall points { at, cost } and ticks left in the current stall
+        extraTicks: stalls.reduce((s, x) => s + x.cost, 0),
       };
       this.intake.items -= size;
       if (this.intake.items <= 1e-9 || !q.length) { this.intake.items = 0; this.intake.oldestTick = null; this.intake.cohorts = []; }
@@ -590,11 +602,10 @@
         }
         let take = Math.min(rate, b.remaining);
         const done = b.size - b.remaining;
-        if (b.stalls.length && done + take >= b.stalls[0]) {
+        if (b.stalls.length && done + take >= b.stalls[0].at) {
           // reach the expensive conversion, then stall for its cost
-          take = Math.max(0, Math.min(take, b.stalls[0] - done));
-          b.stalls.shift();
-          b.stallLeft = cfg.expensiveCost;
+          take = Math.max(0, Math.min(take, b.stalls[0].at - done));
+          b.stallLeft = b.stalls.shift().cost;
         }
         b.remaining -= take;
         this.creditProcessed(b, take);
@@ -605,7 +616,7 @@
           w.bundle = null;
           w.completed++;
           latencies.push(t - b.createdTick);
-          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive });
+          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, extraTicks: b.extraTicks });
           this.totals.bundlesCompleted++;
           this.events.push({ type: 'complete', worker: w.id });
         }
@@ -686,7 +697,7 @@
   }
 
   return {
-    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, COHORT_TICKS, FRESH_LEVELS, FRESH_WINDOW, makeRng, sampleRate,
+    Simulation, DEFAULTS, DISTRIBUTIONS, ROUTING, COHORT_TICKS, FRESH_LEVELS, FRESH_WINDOW, makeRng, sampleRate, sampleLognormal,
     expectedRate, expectedBundleTicks: expectedBundleTicksCached,
   };
 });

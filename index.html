@@ -32,7 +32,7 @@
       <div class="preset-row">
         <button class="chip" data-preset="healthy" title="Arrivals at ~80% of capacity">Healthy</button>
         <button class="chip" data-preset="overloaded" title="Arrivals above capacity: backlog grows without bound">Overloaded</button>
-        <button class="chip" data-preset="expensive" title="0.039% of conversions cost 43 min extra: mean 4 h, sd 1.2 h end to end">Expensive tail</button>
+        <button class="chip" data-preset="expensive" title="0.053% of conversions cost 32 ± 19 min extra: mean 4 h, sd 1.2 h end to end">Expensive tail</button>
         <button class="chip" data-preset="sticky" title="Sticky partition routing: bundles wait for their assigned worker">Sticky partitions</button>
         <button class="chip" data-preset="bursty" title="Traffic swings ±60% over a day">Bursty traffic</button>
       </div>
@@ -109,8 +109,12 @@
         <input type="range" data-param="expensiveFraction" min="0" max="0.001" step="0.00001" value="0.0001">
       </label>
       <label class="field">
-        <span class="lbl">Extra cost <output data-out="expensiveCost">20 min</output> <small>each · adds <span id="expensive-extra">14 min</span> per bundle on average</small></span>
+        <span class="lbl">Extra cost, mean <output data-out="expensiveCost">20 min</output> <small>each (log-normal)</small></span>
         <input type="range" data-param="expensiveCost" min="0" max="720" step="6" value="120">
+      </label>
+      <label class="field">
+        <span class="lbl">Extra cost, spread <output data-out="expensiveCostSd">10 min</output> <small>sd · per bundle: +<span id="expensive-extra">14 min</span> ± <span id="expensive-extra-sd">19 min</span></small></span>
+        <input type="range" data-param="expensiveCostSd" min="0" max="360" step="6" value="60">
       </label>
       <div class="capacity-line">
         A bundle takes <b id="bundle-ticks">2h 14m</b> on average · capacity <b id="capacity">10,000</b> conversions / tick · load ratio ρ <b id="rho">0.80</b>
@@ -304,7 +308,7 @@
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
         <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment. <i>Lowest idle index</i> is first-fit: work concentrates on the lowest-numbered workers and the highest-numbered ones stay idle while there is spare capacity.</li>
         <li><b>Processing</b>: each worker holds one bundle. Every tick it draws a rate in conversions per tick from the distribution, multiplies by any degradation, and completes that many conversions. All workers are identical. With the defaults (10 per tick, 7,200 per bundle) the rate-driven part of a bundle takes about 2 hours. When it is done the worker takes the next bundle on the following tick.</li>
-        <li><b>Expensive conversions</b>: each conversion is independently expensive with the configured share, so a bundle of B conversions holds Poisson(B × share) of them, scattered at random positions. When a worker reaches one it stalls for the extra cost before continuing, so a bundle with k expensive conversions takes k × cost longer. Extra time per bundle therefore has mean B × share × cost and standard deviation cost × √(B × share). Per-tick rate noise averages out over a bundle; this is the mechanism that gives end-to-end times a real spread.</li>
+        <li><b>Expensive conversions</b>: each conversion is independently expensive with the configured share, so a bundle of B conversions holds Poisson(B × share) of them, scattered at random positions. Each one draws its own cost from a log-normal distribution with the configured mean and spread; when a worker reaches it, it stalls for that cost before continuing. Extra time per bundle is the sum of those costs: mean B × share × cost and standard deviation √(B × share × (cost² + spread²)). Per-tick rate noise averages out over a bundle; this is the mechanism that gives end-to-end times a real spread.</li>
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, where the expected ticks are the rate-driven part (estimated by simulation) plus the mean stall time. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already processed. Within a bundle, conversions are credited oldest-minute first as the worker makes progress. "Complete through" is the most recent minute at which that minute and every older one are at least 99% processed.</li>
         <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>

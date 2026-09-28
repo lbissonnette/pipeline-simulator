@@ -61,7 +61,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Routing | Lowest idle index (first fit, default), any idle worker, round robin over idle workers, or sticky partition (a bundle waits for its pre-assigned worker). |
 | Processing rate | Distribution | Normal, uniform, log-normal (heavy tail) or bimodal (fast + slow mode). |
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
-| | Expensive conversions | Share of conversions that each cost a fixed extra time (default 0.01% at 20 min). A bundle with k of them stalls k × cost. This is what spreads end-to-end times; workers are identical. |
+| | Expensive conversions | Share of conversions that are expensive (default 0.01%), and the mean and spread of each one's extra cost (default 20 ± 10 min, log-normal). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N minutes. |
 | | Degraded workers | Multiply the rate of a percentage of workers, the lowest by index (default) or chosen at random, for N minutes. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Upstream delay | Hold arrivals for N minutes, then release them all at once. |
@@ -71,7 +71,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Random seed | Seed for the run; Reset replays it. |
 
 Presets: **Healthy** (ρ ≈ 0.8), **Overloaded** (ρ ≈ 1.2), **Expensive tail**
-(0.039% of conversions cost 43 min: end-to-end mean 4 h, sd 1.2 h),
+(0.053% of conversions cost 32 ± 19 min: end-to-end mean 4 h, sd 1.2 h),
 **Sticky partitions** and **Bursty traffic**. The speed control runs from 1 simulated minute per real
 second up to 2 hours per second. Space toggles play/pause, `s` or → steps one
 tick.
@@ -100,10 +100,12 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
    (±1 minute), so it does not spread end-to-end times.
 5. **Expensive conversions**: each conversion is independently expensive with
    probability `share`, so a bundle holds Poisson(B × share) of them at random
-   positions. Reaching one stalls the worker for `cost` ticks. Extra time per
-   bundle has mean B × share × cost and sd cost × √(B × share): the default
-   0.01% at 20 min adds ~14 min ± 17 min; 0.039% at 43 min gives an
-   end-to-end mean of 4 h with sd 1.2 h.
+   positions. Each draws its own cost from a log-normal with the configured
+   mean and spread; reaching one stalls the worker for that long. Extra time
+   per bundle is a compound Poisson sum with mean B × share × cost and
+   sd √(B × share × (cost² + spread²)): the default 0.01% at 20 ± 10 min
+   adds ~14 ± 19 min; 0.053% at 32 ± 19 min gives an end-to-end mean of
+   4 h with sd 1.2 h and a smooth, right-skewed histogram.
 6. **Capacity** = workers × bundleSize ÷ E[ticks per bundle], where the
    expected ticks are the rate-driven part (estimated by simulation) plus the
    mean stall time. With the defaults that is ~8,900 conversions per tick. The load ratio
