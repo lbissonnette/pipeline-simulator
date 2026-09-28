@@ -22,7 +22,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   expected bundle time); the white bar at the bottom is progress on that
   bundle; a red corner mark means the worker is stalled on a conversion of
   death; hatched cells are offline. The dispatcher turns red when its queue is full and the
-  bundler shows "blocked". Dots animate bundles moving between stages. Hover a
+  bundler shows "blocked". Dots animate bundles moving between stages; green dots on the arrow into
+  "done" are completed bundles. Hover a
   cell for its current bundle, last-tick rate and speed factor.
 - **KPI row** – backlog (with change over the past hour), age of the oldest
   unprocessed conversion, p50/p95 end-to-end latency over a 30-minute window,
