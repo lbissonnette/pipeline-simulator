@@ -627,7 +627,12 @@
       reference: { key: 'nominalCapacity', name: 'Expected capacity' },
     }, timeOpts)),
     latency: new LineChart($('#chart-latency'), Object.assign({}, timeOpts, {
-      series: [{ key: 'latP50Hr', name: 'p50', color: '--s1' }, { key: 'latP95Hr', name: 'p95', color: '--s2' }],
+      series: [{ key: 'latP50Hr', name: 'P50', color: '--s1' }, { key: 'latP90Hr', name: 'P90', color: '--s2' }, { key: 'latP99Hr', name: 'P99', color: '--s3' }],
+      yFormat: fmtHours,
+      format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_HOUR),
+    })),
+    inflight: new LineChart($('#chart-inflight'), Object.assign({}, timeOpts, {
+      series: [{ key: 'inflight50Hr', name: 'P50', color: '--s1' }, { key: 'inflight90Hr', name: 'P90', color: '--s2' }, { key: 'inflight99Hr', name: 'P99', color: '--s3' }],
       yFormat: fmtHours,
       format: v => (v === null || v === undefined) ? '–' : fmtDur(v * TICKS_PER_HOUR),
     })),
@@ -732,6 +737,31 @@
     histChart.setData({ bins, series });
     histChart.draw();
   }
+  // ---------- in-flight age histogram ----------
+  const inflightHist = new Histogram($('#chart-inflight-hist'), {
+    xLabel: v => fmtDur(v * TICKS_PER_MIN),
+    xTicks: (x0, x1) => timeTicks(x0 * TICKS_PER_MIN, x1 * TICKS_PER_MIN).map(t => ({ value: t.value / TICKS_PER_MIN, label: t.label })),
+    countLabel: 'conversions',
+  });
+  let inflightTotal = 0;
+  function renderInflightHistogram() {
+    const rows = sim.inflightByAge(); // ascending age, ticks
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    inflightTotal = total;
+    // range from the 99.5th percentile of age, overflow bin beyond
+    let span = 0, acc = 0;
+    for (const r of rows) { acc += r.count; if (acc >= 0.995 * total) { span = r.age / TICKS_PER_MIN; break; } }
+    const maxMin = Math.max(30, span + 1);
+    let binMin = BIN_STEPS_MIN[BIN_STEPS_MIN.length - 1];
+    for (const bm of BIN_STEPS_MIN) { if (maxMin / bm <= 60) { binMin = bm; break; } }
+    const nBins = Math.ceil(maxMin / binMin) + 1;
+    const bins = Array.from({ length: nBins }, (_, i) => ({ x0: i * binMin, x1: (i + 1) * binMin, overflow: i === nBins - 1 }));
+    const counts = new Array(nBins).fill(0);
+    for (const r of rows) counts[Math.min(nBins - 1, Math.floor(r.age / TICKS_PER_MIN / binMin))] += r.count;
+    inflightHist.setData({ bins, series: [{ name: 'in flight', color: '--s1', counts, values: counts.map(v => total > 0 ? (100 * v) / total : 0) }] });
+    inflightHist.draw();
+  }
+
   function renderHistogramText() {
     for (const w of histWindows) {
       $(`#hist-${w.key}-p50`).textContent = fmtDurFixed(w.win.percentile(0.5));
@@ -754,10 +784,10 @@
   // 30-minute rolling window for latency percentiles (few bundles finish per
   // tick). Built incrementally: only ticks appended since the last call are
   // processed, and rows that fell out of the history window are dropped.
-  const AVG_WIN = 5 * TICKS_PER_MIN, LAT_WIN = 30 * TICKS_PER_MIN;
-  const rowState = { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p95: null };
+  const AVG_WIN = 5 * TICKS_PER_MIN, LAT_WIN = 60 * TICKS_PER_MIN;
+  const rowState = { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p90: null, p99: null };
   function resetRows() {
-    Object.assign(rowState, { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p95: null });
+    Object.assign(rowState, { rows: [], lastTick: 0, q: [], sa: 0, sp: 0, latQ: [], latCount: 0, p50: null, p90: null, p99: null });
   }
   function chartRows(history) {
     const st = rowState;
@@ -782,15 +812,16 @@
         const all = [];
         for (const arr of st.latQ) for (const v of arr) all.push(v);
         all.sort((a, b) => a - b);
-        st.p50 = all[Math.floor(all.length * 0.5)] / TICKS_PER_HOUR;
-        st.p95 = all[Math.min(all.length - 1, Math.floor(all.length * 0.95))] / TICKS_PER_HOUR;
-      } else if (st.latCount < 5) { st.p50 = null; st.p95 = null; }
+        const at = p => all[Math.min(all.length - 1, Math.floor(all.length * p))] / TICKS_PER_HOUR;
+        st.p50 = at(0.5); st.p90 = at(0.9); st.p99 = at(0.99);
+      } else if (st.latCount < 5) { st.p50 = null; st.p90 = null; st.p99 = null; }
       st.rows.push({
         tick: h.tick, backlogItems: h.backlogItems, nominalCapacity: h.nominalCapacity,
         dispatcherQueued: h.dispatcherQueued, dispatcherCapacity: h.dispatcherCapacity,
         arrivals: st.sa / st.q.length, processed: st.sp / st.q.length, utilPct: h.utilization * 100,
-        latP50Hr: st.p50, latP95Hr: st.p95,
+        latP50Hr: st.p50, latP90Hr: st.p90, latP99Hr: st.p99,
         fresh50Hr: h.fresh50 / TICKS_PER_HOUR, fresh90Hr: h.fresh90 / TICKS_PER_HOUR, fresh99Hr: h.fresh99 / TICKS_PER_HOUR,
+        inflight50Hr: h.inflight50 / TICKS_PER_HOUR, inflight90Hr: h.inflight90 / TICKS_PER_HOUR, inflight99Hr: h.inflight99 / TICKS_PER_HOUR,
       });
       st.lastTick = h.tick;
     }
@@ -814,11 +845,14 @@
     }
     $('#kpi-oldest').textContent = fmtDur(snap.oldestAge);
     const last = rows[rows.length - 1];
-    if (last && last.latP95Hr !== null) {
-      $('#kpi-p95').textContent = fmtDur(last.latP95Hr * TICKS_PER_HOUR);
-      $('#kpi-p50').textContent = `p50 ${fmtDur(last.latP50Hr * TICKS_PER_HOUR)} · 30-min`;
+    if (last && last.latP99Hr !== null) {
+      $('#kpi-p99').textContent = fmtDur(last.latP99Hr * TICKS_PER_HOUR);
+      $('#kpi-p50').textContent = `p50 ${fmtDur(last.latP50Hr * TICKS_PER_HOUR)} · 1 h window`;
+      $('#processed-p50').textContent = fmtDurFixed(last.latP50Hr * TICKS_PER_HOUR);
+      $('#processed-p90').textContent = fmtDurFixed(last.latP90Hr * TICKS_PER_HOUR);
+      $('#processed-p99').textContent = fmtDurFixed(last.latP99Hr * TICKS_PER_HOUR);
     } else {
-      $('#kpi-p95').textContent = '–';
+      $('#kpi-p99').textContent = '–';
       $('#kpi-p50').textContent = 'no bundles finished yet';
     }
     $('#kpi-in').textContent = last ? fmt(last.arrivals) : '0';
@@ -878,7 +912,8 @@
       if (name === 'completeness') { c.setData(cohorts); c.setDomain(firstTick, sim.tick); if (mine) c.draw(); }
       else { c.setData(rows); if (mine) c.draw(); }
     }
-    if (drawAll || (i % chartStride) === slot) renderHistogram();
+    if (drawAll || (i++ % chartStride) === slot) renderHistogram();
+    if (drawAll || (i++ % chartStride) === slot) renderInflightHistogram();
     // incident countdowns: once a second, or at once when the set changes
     if (force || now - lastIncidents >= 1000 || sim.incidents.length !== incidentRows.size) { lastIncidents = now; renderIncidents(); }
     if (!force && playing && now - lastText < TEXT_INTERVAL_MS) return;
@@ -892,6 +927,10 @@
     $('#fresh-p50').textContent = fmtDurFixed(f.fresh50);
     $('#fresh-p90').textContent = fmtDurFixed(f.fresh90);
     $('#fresh-p99').textContent = fmtDurFixed(f.fresh99);
+    $('#inflight-p50').textContent = fmtDurFixed(f.inflight50);
+    $('#inflight-p90').textContent = fmtDurFixed(f.inflight90);
+    $('#inflight-p99').textContent = fmtDurFixed(f.inflight99);
+    $('#inflight-total').textContent = fmt(inflightTotal);
     renderHistogramText();
   }
 

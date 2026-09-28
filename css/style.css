@@ -195,6 +195,7 @@ button, input, select { font: inherit; color: inherit; }
 @media (max-width: 960px) { #stage { height: 420px; } }
 .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .charts .card.wide { grid-column: 1 / -1; }
+.charts .card:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .chart-wrap.tall canvas { height: 240px; }
 @media (max-width: 1200px) { .charts { grid-template-columns: 1fr; } }
 .chart-wrap { position: relative; }

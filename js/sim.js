@@ -173,6 +173,17 @@
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  function addPoison(list, cost, n) {
+    const e = list.find(x => x.cost === cost);
+    if (e) e.n += n; else list.push({ cost, n });
+  }
+  // Binomial(n, p) by direct simulation; n is small here (conversions of death per slice).
+  function binomial(rng, n, p) {
+    let k = 0;
+    for (let i = 0; i < n; i++) if (rng.uniform() < p) k++;
+    return k;
+  }
+
   const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
   const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
   const FRESH_LEVELS = [50, 90, 99];
@@ -200,6 +211,7 @@
       this.completions = [];      // { tick, latency, size } per finished bundle, oldest first
       this.completionsHead = 0;   // index of the oldest retained completion
       this.fresh = null;          // cached freshTimes(), refreshed every cohort
+      this.inflight = null;       // cached inflightPercentiles(), refreshed every cohort
       this.dispatcher = [];                          // queued bundles, FIFO
       this.incidents = [];
       this.nextIncidentId = 1;
@@ -256,9 +268,12 @@
     //                       at random, 'lowest' takes the lowest indices.
     //       'upstreamDelay' arrivals are held until the incident ends
     //       'poison'        magnitude = { share, cost }: while active, an extra
-    //                       `share` of conversions in each bundle cut are
-    //                       expensive at a fixed `cost` (ticks), on top of the
-    //                       configured expensive conversions
+    //                       `share` of ARRIVING conversions are expensive at a
+    //                       fixed `cost` (ticks), on top of the configured
+    //                       expensive conversions. The tag travels with the
+    //                       conversions through the intake buffer and any
+    //                       upstream hold, so it follows arrival time, not
+    //                       bundling time.
     //       'outage' / 'slowdown' are kept as shorthands for 'degrade'
     addIncident(type, magnitude, duration) {
       if (type === 'outage') { type = 'degrade'; magnitude = { factor: 0, fraction: magnitude }; }
@@ -350,12 +365,19 @@
 
     // ---------- intake / bundling ----------
     // Record n conversions arriving this tick into a buffer (intake or held).
+    // Buffer slices: { cohort, count, firstTick, poison: [{ cost, n }] } where
+    // poison lists conversions of death (by cost) still inside the slice.
     addArrivals(buffer, n) {
       if (n <= 0) return;
       const t = this.tick, c = cohortOf(t);
-      const last = buffer.cohorts[buffer.cohorts.length - 1];
+      let last = buffer.cohorts[buffer.cohorts.length - 1];
       if (last && last.cohort === c) last.count += n;
-      else buffer.cohorts.push({ cohort: c, count: n, firstTick: t });
+      else { last = { cohort: c, count: n, firstTick: t, poison: [] }; buffer.cohorts.push(last); }
+      for (const inc of this.incidents) {
+        if (inc.type !== 'poison') continue;
+        const k = Math.min(n, this.rng.poisson(n * inc.magnitude.share));
+        if (k > 0) addPoison(last.poison, inc.magnitude.cost, k);
+      }
       if (buffer.items === 0) buffer.oldestTick = t;
       buffer.items += n;
       let stat = this.cohorts.get(c);
@@ -371,6 +393,7 @@
     // Take `size` conversions from the front of the intake buffer as a bundle.
     cutBundle(size) {
       const cohorts = [];
+      const poisonStalls = [];
       let need = size;
       const q = this.intake.cohorts;
       while (need > 1e-9 && q.length) {
@@ -378,6 +401,17 @@
         const take = Math.min(need, head.count);
         // count: conversions of this cohort not yet worked through; total: in the bundle
         cohorts.push({ cohort: head.cohort, count: take, total: take, firstTick: head.firstTick });
+        // conversions of death in the slice: each independently comes along
+        // with probability take / count (all of them if the slice is emptied)
+        if (head.poison && head.poison.length) {
+          const p = take >= head.count - 1e-9 ? 1 : take / head.count;
+          for (const entry of head.poison) {
+            const moved = p >= 1 ? entry.n : binomial(this.rng, entry.n, p);
+            for (let i = 0; i < moved; i++) poisonStalls.push(entry.cost);
+            entry.n -= moved;
+          }
+          head.poison = head.poison.filter(e => e.n > 0);
+        }
         head.count -= take; need -= take;
         if (head.count <= 1e-9) q.shift();
       }
@@ -388,14 +422,9 @@
       for (let i = 0; i < k; i++) {
         stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd)) });
       }
-      // conversions of death: extra fixed-cost stalls while such an incident is active
-      let poisoned = 0;
-      for (const inc of this.incidents) {
-        if (inc.type !== 'poison') continue;
-        const n = Math.min(Math.round(size), this.rng.poisson(size * inc.magnitude.share));
-        for (let i = 0; i < n; i++) stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, inc.magnitude.cost), poison: true });
-        poisoned += n;
-      }
+      // conversions of death that arrived tagged: fixed cost, random position
+      const poisoned = poisonStalls.length;
+      for (const cost of poisonStalls) stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, cost), poison: true });
       stalls.sort((x, y) => x.at - y.at);
       const b = {
         id: this.nextBundleId++, size, remaining: size,
@@ -421,9 +450,11 @@
       for (const c of b.cohorts) {
         const done = c.total - c.count;
         if (done > 1e-9) { const stat = this.cohorts.get(c.cohort); if (stat) stat.processed += done; }
-        if (c.count > 1e-9) back.push({ cohort: c.cohort, count: c.count, firstTick: c.firstTick });
+        if (c.count > 1e-9) back.push({ cohort: c.cohort, count: c.count, firstTick: c.firstTick, poison: [] });
       }
       if (!back.length) return;
+      // conversions of death not yet reached go back with the oldest slice
+      for (const st of b.stalls) if (st.poison) addPoison(back[0].poison, st.cost, 1);
       this.intake.cohorts = back.concat(this.intake.cohorts);
       this.intake.items += b.remaining;
       this.intake.oldestTick = this.intake.cohorts[0].firstTick;
@@ -513,6 +544,35 @@
       }
       for (const L of pending) result[L] = 0;
       return result;
+    }
+
+    // Conversions still in flight (arrived but not yet written out), grouped
+    // by arrival minute and returned oldest-last as { age (ticks), count }.
+    inflightByAge() {
+      const out = [];
+      for (const [c, s] of this.cohorts) {
+        const n = s.arrived - Math.min(s.processed, s.arrived);
+        if (n > 0.5) out.push({ cohort: c, age: this.tick - (c * COHORT_TICKS + 1), count: n });
+      }
+      out.sort((a, b) => a.age - b.age);
+      return out;
+    }
+
+    // Weighted percentiles of the in-flight age distribution, in ticks.
+    inflightPercentiles(levels) {
+      levels = (levels || FRESH_LEVELS).slice().sort((a, b) => a - b);
+      const rows = this.inflightByAge();
+      const total = rows.reduce((s, r) => s + r.count, 0);
+      const res = {};
+      if (total <= 0) { for (const L of levels) res[L] = 0; return res; }
+      let acc = 0, i = 0;
+      for (const r of rows) {
+        acc += r.count;
+        while (i < levels.length && acc >= (levels[i] / 100) * total) { res[levels[i]] = r.age; i++; }
+        if (i >= levels.length) break;
+      }
+      for (; i < levels.length; i++) res[levels[i]] = rows[rows.length - 1].age;
+      return res;
     }
 
     // ---------- dispatcher ----------
@@ -644,14 +704,17 @@
           w.completed++;
           this.creditCompleted(b);
           latencies.push(t - b.createdTick);
-          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, extraTicks: b.extraTicks });
+          this.completions.push({ tick: t, latency: t - b.createdTick, size: b.size, expensive: b.expensive, poisoned: b.poisoned, extraTicks: b.extraTicks, createdTick: b.createdTick });
           this.totals.bundlesCompleted++;
           this.events.push({ type: 'complete', worker: w.id });
         }
       }
       this.totals.processed += processed;
 
-      if (!this.fresh || t % COHORT_TICKS === 0) this.fresh = this.freshTimes();
+      if (!this.fresh || t % COHORT_TICKS === 0) {
+        this.fresh = this.freshTimes();
+        this.inflight = this.inflightPercentiles();
+      }
       this.pruneCompletions();
 
       const snap = this.snapshot(arrivals, dispatched, processed, busy, latencies, offline, cut, slowed, stalled);
@@ -708,6 +771,9 @@
         fresh50: this.fresh ? this.fresh[50] : 0,
         fresh90: this.fresh ? this.fresh[90] : 0,
         fresh99: this.fresh ? this.fresh[99] : 0,
+        inflight50: this.inflight ? this.inflight[50] : 0,
+        inflight90: this.inflight ? this.inflight[90] : 0,
+        inflight99: this.inflight ? this.inflight[99] : 0,
         completedBundles: latencies.length,
         busy, offline, slowed: slowed || 0, stalled: stalled || 0, idle: n - busy - offline,
         utilization: n - offline > 0 ? busy / (n - offline) : 0,

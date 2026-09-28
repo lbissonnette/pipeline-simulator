@@ -189,9 +189,9 @@
         <div class="delta">time in the system</div>
       </div>
       <div class="tile">
-        <div class="label">Latency p95</div>
-        <div class="value" id="kpi-p95">–</div>
-        <div class="delta" id="kpi-p50">p50 –</div>
+        <div class="label">Processed age p99</div>
+        <div class="value" id="kpi-p99">–</div>
+        <div class="delta" id="kpi-p50">p50 – · 1 h window</div>
       </div>
       <div class="tile">
         <div class="label">Arrivals</div>
@@ -256,6 +256,27 @@
         <div class="chart-wrap"><canvas id="chart-fresh"></canvas></div>
       </div>
       <div class="card wide">
+        <div class="card-head"><h2>Age of in-flight data</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>% of conversions not yet written out, by age</span>
+            <span class="unit" id="inflight-hist-note"><b class="num" id="inflight-total">–</b> conversions in flight</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-inflight-hist"></canvas></div>
+      </div>
+      <div class="card wide">
+        <div class="card-head"><h2>Age percentiles of in-flight data</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>P50</span>
+            <span class="lg-item"><i class="sw s2"></i>P90</span>
+            <span class="lg-item"><i class="sw s3"></i>P99</span>
+            <span class="unit">hours</span>
+            <span class="unit" id="inflight-note">now: P50 <b class="num" id="inflight-p50">–</b> · P90 <b class="num" id="inflight-p90">–</b> · P99 <b class="num" id="inflight-p99">–</b></span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-inflight"></canvas></div>
+      </div>
+      <div class="card wide">
         <div class="card-head"><h2>End-to-end processing time distribution</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>last 12 h</span>
@@ -264,6 +285,18 @@
           </div>
         </div>
         <div class="chart-wrap"><canvas id="chart-hist"></canvas></div>
+      </div>
+      <div class="card wide">
+        <div class="card-head"><h2>Age percentiles of processed data</h2>
+          <div class="legend">
+            <span class="lg-item"><i class="sw s1"></i>P50</span>
+            <span class="lg-item"><i class="sw s2"></i>P90</span>
+            <span class="lg-item"><i class="sw s3"></i>P99</span>
+            <span class="unit">hours · end-to-end age at write-out, 1 h rolling window</span>
+            <span class="unit" id="processed-note">now: P50 <b class="num" id="processed-p50">–</b> · P90 <b class="num" id="processed-p90">–</b> · P99 <b class="num" id="processed-p99">–</b></span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
       </div>
       <div class="card">
         <div class="card-head"><h2>Backlog over time</h2><span class="unit">conversions in the system</span></div>
@@ -280,16 +313,6 @@
         <div class="chart-wrap"><canvas id="chart-throughput"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>End-to-end latency</h2>
-          <div class="legend">
-            <span class="lg-item"><i class="sw s1"></i>p50</span>
-            <span class="lg-item"><i class="sw s2"></i>p95</span>
-            <span class="unit">hours · 30-min window</span>
-          </div>
-        </div>
-        <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
-      </div>
-      <div class="card">
         <div class="card-head"><h2>Dispatcher queue</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>bundles waiting</span>
@@ -298,7 +321,7 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-dispatcher"></canvas></div>
       </div>
-      <div class="card wide">
+      <div class="card">
         <div class="card-head"><h2>Worker utilisation</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>busy share (%)</span>
@@ -319,8 +342,10 @@
         <li><b>Expensive conversions</b>: each conversion is independently expensive with the configured share, so a bundle of B conversions holds Poisson(B × share) of them, scattered at random positions. Each one draws its own cost from a log-normal distribution with the configured mean and spread; when a worker reaches it, it stalls for that cost before continuing. Extra time per bundle is the sum of those costs: mean B × share × cost and standard deviation √(B × share × (cost² + spread²)). Per-tick rate noise averages out over a bundle; this is the mechanism that gives end-to-end times a real spread. No single stall exceeds 4 hours. The defaults (1.8 per bundle at 2 ± 3 min) give a median of about 23 minutes end to end, p90 near 30 minutes and p99 near 45 minutes.</li>
         <li><b>Capacity</b> = workers × bundle size ÷ expected ticks per bundle, where the expected ticks are the rate-driven part (estimated by simulation) plus the mean stall time. When the load ratio ρ (arrivals ÷ capacity) is above 1 the dispatcher pins at its capacity and the backlog grows without bound at the bundler.</li>
         <li><b>Completeness by arrival minute</b> groups conversions by the simulated minute they arrived in and shows, for each minute on the same 12-hour horizon as the other charts, the share already written out. A bundle is written atomically: none of its conversions count until the whole bundle completes, so a minute's completeness stays at 0% for about a bundle time and then jumps. "Complete through" is the most recent minute at which that minute and every older one are at least 99% complete.</li>
+        <li><b>Age of in-flight data</b> looks at every conversion that has arrived but not yet been written out (held upstream, waiting at the bundler, queued at the dispatcher, or inside a bundle being processed) and shows how old it is now, as a histogram by age and as P50/P90/P99 over time. Ages are grouped by arrival minute.</li>
+        <li><b>Age percentiles of processed data</b> are the end-to-end ages of bundles at the moment they were written out, over a rolling one-hour window of completions.</li>
         <li><b>Fresh time</b> slides a 3-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the three minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
-        <li><b>Conversion of Death</b> adds, for its duration, an extra share of expensive conversions to every bundle cut, each with a fixed cost you choose (still capped at 4 hours). They stack on top of the configured expensive conversions and show as stalled workers.</li>
+        <li><b>Conversion of Death</b> tags, for its duration, an extra share of <i>arriving</i> conversions as expensive with a fixed cost you choose (still capped at 4 hours). The tag travels with the conversions through the bundler and any upstream hold, so it follows when data arrived rather than when it was bundled. They stack on top of the configured expensive conversions and show as stalled workers.</li>
         <li><b>Degraded workers</b> picks a share of the pool, either at random or the lowest-numbered workers, and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
         <li><b>Processing time distribution</b> bins the end-to-end time of every bundle completed in the last 12 hours and in the last 7 days, weighted by the conversions in each bundle and normalised to each window's own total, so the two shapes are comparable even though the 7-day set is far larger. Bin width adapts to the widest latency seen.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>

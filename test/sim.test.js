@@ -381,6 +381,46 @@ test('conversion-of-death incident adds fixed-cost stalls while active', () => {
   assert.ok(sim.latencySamples(60).every(c => c.expensive === 0));
 });
 
+test('conversions of death follow arrival time through an upstream hold', () => {
+  const sim = new Simulation({ seed: 82, expensiveFraction: 0 });
+  run(sim, 600);
+  // hold arrivals for 300 ticks; poison only the first 120 ticks of the hold
+  sim.addIncident('upstreamDelay', 1, 300);
+  const poisonStart = sim.tick + 1;
+  sim.addIncident('poison', { share: 0.002, cost: 60 }, 120);
+  const poisonEnd = sim.tick + 120;
+  run(sim, 301); // the hold releases on the tick after it expires
+  assert.equal(sim.last.heldItems, 0);
+  run(sim, 900); // let the released bundles finish
+  const c = sim.latencySamples(900);
+  const inWindow = c.filter(x => x.createdTick >= poisonStart && x.createdTick <= poisonEnd);
+  const afterWindow = c.filter(x => x.createdTick > poisonEnd);
+  assert.ok(inWindow.length > 100 && afterWindow.length > 100, `${inWindow.length} / ${afterWindow.length}`);
+  // ~2.4 per bundle expected in the window: nearly all poisoned; none afterwards
+  assert.ok(inWindow.filter(x => x.poisoned > 0).length / inWindow.length > 0.85);
+  assert.ok(afterWindow.every(x => x.poisoned === 0));
+  invariants(sim);
+});
+
+test('in-flight age: counts match the backlog and percentiles are ordered', () => {
+  const sim = new Simulation({ seed: 91 });
+  run(sim, 2000);
+  const rows = sim.inflightByAge();
+  const total = rows.reduce((s, r) => s + r.count, 0);
+  // in flight = not yet written out: the backlog's remaining work plus the
+  // already-worked part of bundles still in progress (written only at the end)
+  const workedNotWritten = sim.workers.reduce((s, w) => s + (w.bundle ? w.bundle.size - w.bundle.remaining : 0), 0);
+  assert.ok(Math.abs(total - (sim.last.backlogItems + workedNotWritten)) < 1e-3, `${total} vs ${sim.last.backlogItems + workedNotWritten}`);
+  for (let i = 1; i < rows.length; i++) assert.ok(rows[i].age >= rows[i - 1].age);
+  const p = sim.inflightPercentiles();
+  assert.ok(p[50] <= p[90] && p[90] <= p[99], JSON.stringify(p));
+  // ages of data still in flight under healthy load: mostly under one bundle time
+  assert.ok(p[50] > 3 * 6 && p[50] < 20 * 6, `p50 ${p[50] / 6} min`);
+  assert.ok(p[99] < 90 * 6, `p99 ${p[99] / 6} min`);
+  // the snapshot value is refreshed once per arrival minute
+  assert.ok(Math.abs(sim.last.inflight99 - p[99]) <= 6, `${sim.last.inflight99} vs ${p[99]}`);
+});
+
 test('a single stall never exceeds the cap', () => {
   const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
   run(sim, 400);
