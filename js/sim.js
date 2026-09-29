@@ -140,8 +140,8 @@
   // ---------- defaults ----------
   // Defaults assume a tick of 10 seconds: a worker does 10 conversions per
   // tick (1/s), so a bundle of 1,200 takes ~120 ticks (20 min) of work plus
-  // expensive-conversion stalls (1.8 per bundle on average, 2 ± 3 min each,
-  // capped at 4 h), for an end-to-end median of ~23 min (p99 ~45 min).
+  // expensive-conversion stalls (1.8 per bundle on average, 2 ± 3 min each),
+  // for an end-to-end median of ~23 min (p99 ~45 min).
   // 1,024 identical workers (a 32 x 32 grid) give ~8,600 conversions per tick.
   const DEFAULTS = {
     workers: 1024,
@@ -164,7 +164,6 @@
     expensiveFraction: 0.0015, // share of conversions that are expensive (0.15%, ~1.8 per bundle)
     expensiveCost: 12,         // mean extra ticks per expensive conversion (2 min)
     expensiveCostSd: 18,       // sd of that cost (log-normal), 3 min
-    expensiveCostCap: 1440,    // no single stall longer than this (4 h), like a timeout
     historyLength: 4320,       // 12 h
     completionRetention: 7 * 24 * 360, // keep bundle completions for 7 days
     seed: 42,
@@ -444,11 +443,11 @@
       const k = cfg.expensiveFraction > 0 ? Math.min(Math.round(size), this.rng.poisson(size * cfg.expensiveFraction)) : 0;
       const stalls = [];
       for (let i = 0; i < k; i++) {
-        stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd)) });
+        stalls.push({ at: this.rng.uniform() * size, cost: sampleLognormal(this.rng, cfg.expensiveCost, cfg.expensiveCostSd) });
       }
       // conversions of death that arrived tagged: fixed cost, random position
       const poisoned = poisonStalls.length;
-      for (const cost of poisonStalls) stalls.push({ at: this.rng.uniform() * size, cost: Math.min(cfg.expensiveCostCap, cost), poison: true });
+      for (const cost of poisonStalls) stalls.push({ at: this.rng.uniform() * size, cost, poison: true });
       stalls.sort((x, y) => x.at - y.at);
       const b = {
         id: this.nextBundleId++, size, remaining: size,
@@ -810,7 +809,6 @@
     // mean stall time from expensive conversions.
     expectedBundleTicks() {
       const cfg = this.config;
-      // the cap trims a little off the mean cost; ignored here (well under 1% for the defaults)
       return expectedBundleTicksCached(cfg.dist, cfg.bundleSize) + cfg.bundleSize * cfg.expensiveFraction * cfg.expensiveCost;
     }
 

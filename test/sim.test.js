@@ -519,14 +519,16 @@ test('in-flight breakdown: stuck-on-death and degraded layers sum with the rest'
   invariants(sim);
 });
 
-test('a single stall never exceeds the cap', () => {
-  const sim = new Simulation({ seed: 74, expensiveFraction: 0.01, expensiveCost: 600, expensiveCostSd: 3000, expensiveCostCap: 300 });
+test('stalls are not capped: a conversion of death keeps its full cost', () => {
+  const sim = new Simulation({ seed: 74, expensiveFraction: 0 });
+  run(sim, 100);
+  // 20 h each, well past the old 4 h cap
+  sim.addIncident('poison', { share: 0.001, cost: 7200 }, 60);
   run(sim, 400);
-  for (const w of sim.workers) {
-    if (!w.bundle) continue;
-    for (const st of w.bundle.stalls) assert.ok(st.cost <= 300);
-    assert.ok(w.bundle.stallLeft <= 300);
-  }
+  const stalls = sim.workers.filter(w => w.bundle).flatMap(w => w.bundle.stalls.filter(st => st.poison));
+  const stalled = sim.workers.filter(w => w.bundle && w.bundle.stallPoison);
+  assert.ok(stalls.length > 0 && stalls.every(st => st.cost === 7200));
+  assert.ok(stalled.length > 0 && stalled.some(w => w.bundle.stallLeft > 1440), 'no stall past 4 h');
 });
 
 test('workers are homogeneous: no per-worker speed state', () => {
