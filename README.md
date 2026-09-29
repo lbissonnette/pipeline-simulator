@@ -63,6 +63,10 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   chart.
 - **Incident markers** – time charts shade each incident's active period with
   start and end lines; an × marks one that was switched off by hand.
+- **Tour** – a short guided tour opens on the first visit: time controls, the
+  flow, the KPIs, the load ratio ρ, firing an incident, and reading the
+  backlog and freshness charts. It is shown once per browser (remembered in
+  localStorage); the **Tour** button in the top bar replays it.
 - **Layout** – each chart card has a Hide button (collapses to its title) and a
   grip to drag it up or down; the arrangement is remembered per browser. The
   two in-flight age charts start hidden. The parameter panels collapse too;
@@ -165,6 +169,7 @@ npm start       # serve locally
   and as a CommonJS module for the tests.
 - `js/charts.js` – small canvas line chart with crosshair tooltip.
 - `js/main.js` – controls, stage rendering, KPIs.
+- `js/tour.js` – the first-visit guided tour and its replay button.
 - `test/sim.test.js` – conservation, dispatcher bound, one bundle per worker,
   determinism, stability under/over load, incidents, distribution means,
   per-minute completeness, fresh-time percentiles, completion retention.

@@ -17,6 +17,7 @@
     <button id="btn-play" class="btn primary" aria-pressed="false">▶ Play</button>
     <button id="btn-step" class="btn">Step</button>
     <button id="btn-reset" class="btn">Reset</button>
+    <button id="btn-tour" class="btn" title="Replay the introductory tour">Tour</button>
     <label class="speed"><span>Speed</span>
       <input id="speed" type="range" min="0" max="7" value="3" step="1">
       <output id="speed-out">10 min / s</output>
@@ -370,6 +371,7 @@
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
         <li><b>PDF / CDF</b>: the two distribution charts can show either the share of conversions in each bin (PDF, the histogram) or the cumulative share at or below each value (CDF, rising to 100%). The choice is remembered per chart.</li>
         <li><b>Incident markers</b>: every time chart shades the period an incident was active, with a vertical line where it started and where it ended. An × on the end line means it was switched off by hand rather than expiring. Colours follow the incident type: orange for traffic spikes, red for degraded workers and outages, magenta for conversions of death, yellow for upstream holds.</li>
+        <li><b>Tour</b>: a short guided tour runs on your first visit to this site in a browser; the Tour button in the top bar replays it.</li>
         <li><b>Layout</b>: every chart card has a Hide/Show button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The two in-flight age charts start hidden. The arrangement is remembered in this browser. The parameter panels on the left collapse too; only <i>Inject a delay</i> starts open.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
@@ -395,5 +397,6 @@
 <script src="js/sim.js?v=dev"></script>
 <script src="js/charts.js?v=dev"></script>
 <script src="js/main.js?v=dev"></script>
+<script src="js/tour.js?v=dev"></script>
 </body>
 </html>
