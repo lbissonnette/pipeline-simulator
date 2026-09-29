@@ -143,6 +143,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .incident .btn { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
 .incident small { color: var(--text-muted); }
+.subhead + .incident, .hint + .incident { border-top: 0; }
+.incident .inc-desc { grid-column: 1; font-size: 12px; color: var(--text-muted); }
+.incident.scenario .btn { grid-row: 1 / span 2; }
 .incident .warn { grid-column: 1 / -1; margin: 2px 0 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; color: var(--text); background: color-mix(in srgb, var(--warning) 18%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent); }
 .incident select { padding: 2px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12px; }
 .active-incidents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -279,3 +282,34 @@ details.panel:not([open]) { gap: 0; }
 .tour-skip { border: 0; background: none; padding: 4px 0; cursor: pointer; color: var(--text-muted); font-size: 13px; }
 .tour-skip:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .tour-spot { transition: none; } }
+
+/* predefined-outage explanation box, above the KPIs */
+.scenario-box {
+  background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--critical); border-radius: 12px;
+  padding: 12px 16px 12px 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.scenario-box[hidden] { display: none; }
+.sc-head { display: flex; align-items: flex-start; gap: 12px; }
+.sc-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--critical); }
+.sc-titles h2 { font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.sc-status { margin-left: auto; font-size: 12px; color: var(--text-2); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sc-status.done { color: var(--good); }
+.sc-close { border: 0; background: none; cursor: pointer; color: var(--text-muted); font-size: 20px; line-height: 1; padding: 0 2px; }
+.sc-close:hover { color: var(--text); }
+.sc-setup { color: var(--text-2); font-size: 13px; }
+.sc-setup b { color: var(--text); }
+.sc-live { display: flex; flex-wrap: wrap; gap: 8px; }
+.sc-stat { background: var(--surface-2); border-radius: 8px; padding: 6px 10px; min-width: 150px; }
+.sc-stat .k { font-size: 11px; color: var(--text-2); }
+.sc-stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sc-stat .d { font-size: 11px; color: var(--text-muted); }
+.sc-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 8px 20px; }
+@media (max-width: 1100px) { .sc-body { grid-template-columns: 1fr; } }
+.sc-body h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.02em; }
+.sc-body ol { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 13px; }
+.sc-body li { margin: 3px 0; }
+.sc-body li b, .sc-body p b { color: var(--text); }
+.sc-body p { color: var(--text-2); font-size: 13px; }
+.sc-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sc-foot p { color: var(--text-muted); font-size: 12px; flex: 1 1 280px; }

@@ -1,7 +1,7 @@
 /* UI wiring, stage rendering (worker grid + flow particles), KPIs and charts. */
 (function () {
   'use strict';
-  const { Simulation, COHORT_TICKS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
+  const { Simulation, DEFAULTS, COHORT_TICKS, makeRng, sampleRate, expectedRate, expectedBundleTicks } = PipelineSim;
 
   const $ = sel => document.querySelector(sel);
   const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -162,7 +162,8 @@
       incidentRows.clear();
       for (const inc of sim.incidents) {
         const li = document.createElement('li');
-        li.innerHTML = `<span>${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i></i></span><span class="num"></span><button title="Cancel" aria-label="Cancel incident">×</button>`;
+        const scen = scenarioIncidents.get(inc.id);
+        li.innerHTML = `<span>${scen ? `<b>${scen}</b> · ` : ''}${INCIDENT_LABEL[inc.type](inc)}</span><span class="bar"><i></i></span><span class="num"></span><button title="Cancel" aria-label="Cancel incident">×</button>`;
         li.querySelector('button').addEventListener('click', () => { sim.cancelIncident(inc.id); renderIncidents(); if (!playing) render(true); });
         ul.appendChild(li);
         incidentRows.set(inc.id, { li, bar: li.querySelector('.bar i'), time: li.querySelector('.num') });
@@ -177,6 +178,152 @@
     }
   }
 
+  // ---------- predefined outages ----------
+  // Each scenario fires one incident and opens an explanation box above the
+  // KPIs: what was injected, what to watch for, why, and live readouts of the
+  // metrics the story is about (with their values when it started). Closing
+  // the box leaves the incident running; its button ends the incident early.
+  const SCENARIOS = {
+    stuck: {
+      name: 'Stuck workers',
+      incident: { type: 'degrade', magnitude: { factor: 0, fraction: 0.003, selection: 'lowest' }, hours: 999 },
+      endLabel: 'Unstick the workers',
+      setup: c => `<b>${fmtInt(c.affected)}</b> of the ${fmtInt(c.pool)} workers (0.3%, the lowest by index) freeze for <b>999 hours</b>. Each keeps the bundle it was working on, and the dispatcher routes new work around them. <b>Impact is low</b>: only the bundles they were holding are held back, a small amount of data loss until the workers come back.`,
+      watch: c => [
+        '<b>P99 fresh time climbs by an hour every hour</b>, indefinitely, until the outage clears. P50 and P90 fresh time don’t move.',
+        `<b>Backlog, throughput and processed age look normal.</b> The other ${fmtInt(c.pool - c.affected)} workers take the load without noticing.`,
+        '<b>Unstick the workers</b> (the button below, or × on the incident). The held bundles are written out hours late, and P99 fresh time falls back at once.',
+        '<b>The P99 processed-age graph usually misses even that.</b> A few late bundles are far less than 1% of the bundles written in an hour, so P99 processed age barely moves. Only the tail of the processing-time histogram shows them.',
+      ],
+      why: 'Under first-fit routing the lowest-numbered workers are always busy, so each one is holding a bundle when it freezes. Fresh time is measured by arrival minute: the minutes those bundles came from can never be fully written, so the 5-minute window around them stays below 99% complete and simply gets older. Processed-age percentiles count only data that has been written, so data that never finishes is invisible to them.',
+      note: 'Your simulation may vary. One stuck bundle is under 1% of a 5-minute window of arrivals, so P99 climbs only when two of them arrived close together, which happens in most runs. If P99 fresh time stays flat, Reset and run it again, or try another seed.',
+      live: [
+        { label: 'P99 fresh time', row: 'fresh99Hr' },
+        { label: 'P90 fresh time', row: 'fresh90Hr' },
+        { label: 'P99 processed age', row: 'latP99Hr' },
+        { label: 'Conversions held', snap: 'degradedStuckItems' },
+      ],
+    },
+    slowTenth: {
+      name: 'Slow tenth',
+      incident: { type: 'degrade', magnitude: { factor: 0.1, fraction: 0.1, selection: 'random' }, hours: 48 },
+      endLabel: 'End the outage now',
+      setup: c => `<b>${fmtInt(c.affected)}</b> of the ${fmtInt(c.pool)} workers (10%, chosen at random) drop to <b>10% of their normal speed</b> for <b>48 hours</b>. They keep taking work, so every bundle they pick up takes about ten times as long: roughly four hours instead of 23 minutes.`,
+      watch: () => [
+        '<b>First two to three hours: P90 fresh time climbs steadily.</b> About a tenth of every 5-minute window of arrivals is sitting on a slow worker, so no window since the outage began can reach 90% complete.',
+        '<b>P90 processed age doesn’t move.</b> Well under a tenth of the bundles written each hour come from the slow workers, so the 90th percentile never reaches them.',
+        '<b>A few hours in, P90 fresh time drops back to normal</b>, but the outage hasn’t changed at all. The same workers are exactly as slow.',
+        '<b>P99 fresh time and P99 processed age</b> still show it. They sit at about the slow bundle time (three to five hours) for the rest of the 48 hours.',
+      ],
+      why: 'At the start the slow workers still get their usual share of the work, about 10% of every window. Once each of them holds a bundle that will take hours, it takes new work only every few hours, and first-fit routing sends everything else to the fast workers. From then on only about 2% of each window lands on a slow worker. That is too little for P90 to see but well over the 1% that P99 notices. The P90 drop means the slow workers have fallen out of the rotation. It isn’t a recovery.',
+      note: 'Your simulation may vary. The timings are for the default settings; other settings change the numbers, and sometimes the story.',
+      live: [
+        { label: 'P90 fresh time', row: 'fresh90Hr' },
+        { label: 'P90 processed age', row: 'latP90Hr' },
+        { label: 'P99 fresh time', row: 'fresh99Hr' },
+        { label: 'P99 processed age', row: 'latP99Hr' },
+      ],
+    },
+  };
+  const scenarioIncidents = new Map(); // incident id -> scenario name, for the incident list
+  let activeScenario = null;           // { def, inc, startTick, baseline, peak, scanned }
+  let lastRows = [];
+
+  // Settings the scenario texts assume; any change is worth a heads-up.
+  const SCENARIO_KEYS = ['workers', 'arrivalRate', 'waveAmplitude', 'bundleSize', 'bundleMaxWait', 'dispatcherCapacity', 'writeRate', 'writerCapacity', 'writerIntake', 'routing', 'dist', 'expensiveFraction', 'expensiveCost', 'expensiveCostSd'];
+  function changedSettings() {
+    return SCENARIO_KEYS.filter(k => JSON.stringify(sim.config[k]) !== JSON.stringify(DEFAULTS[k]));
+  }
+
+  function liveRaw(item) {
+    if (item.snap) return sim.last[item.snap] || 0;
+    const last = lastRows[lastRows.length - 1];
+    const v = last ? last[item.row] : null;
+    return v === undefined ? null : v;
+  }
+  const fmtLive = (item, v) => (v === null ? '–' : item.snap ? fmt(v) : fmtDurFixed(v * TICKS_PER_HOUR));
+
+  function runScenario(key) {
+    const def = SCENARIOS[key];
+    const { type, magnitude, hours } = def.incident;
+    const inc = sim.addIncident(type, magnitude, Math.round(hours * TICKS_PER_HOUR));
+    scenarioIncidents.set(inc.id, def.name);
+    activeScenario = { def, inc, startTick: sim.tick, baseline: def.live.map(liveRaw), peak: def.live.map(() => null), scanned: sim.tick };
+    const ctx = { affected: inc.workers.length, pool: sim.workers.length };
+    $('#sc-title').textContent = def.name;
+    $('#sc-setup').innerHTML = def.setup(ctx);
+    $('#sc-watch').innerHTML = def.watch(ctx).map(t => `<li>${t}</li>`).join('');
+    $('#sc-why').textContent = def.why;
+    const changed = changedSettings();
+    $('#sc-note').textContent = def.note + (changed.length
+      ? ` Some settings differ from the defaults (${changed.join(', ')}), so expect different numbers.`
+      : '');
+    $('#sc-live').innerHTML = def.live.map(() => '<div class="sc-stat"><div class="k"></div><div class="v"></div><div class="d"></div></div>').join('');
+    $('#sc-end').textContent = def.endLabel;
+    const box = $('#scenario-box');
+    box.hidden = false;
+    renderScenario();
+    box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function renderScenario() {
+    if (!activeScenario || $('#scenario-box').hidden) return;
+    const { def, inc, startTick, baseline, peak } = activeScenario;
+    // peaks since the scenario started, from every chart row not yet scanned
+    // (row-based values) or the current snapshot (the rest)
+    for (const r of lastRows) {
+      if (r.tick <= activeScenario.scanned) continue;
+      def.live.forEach((item, i) => {
+        const v = item.row ? r[item.row] : null;
+        if (v !== null && v !== undefined && (peak[i] === null || v > peak[i])) peak[i] = v;
+      });
+    }
+    if (lastRows.length) activeScenario.scanned = lastRows[lastRows.length - 1].tick;
+    def.live.forEach((item, i) => {
+      if (!item.snap) return;
+      const v = liveRaw(item);
+      if (peak[i] === null || v > peak[i]) peak[i] = v;
+    });
+    const running = sim.incidents.some(i => i.id === inc.id);
+    const entry = sim.incidentLog.find(e => e.id === inc.id);
+    const status = $('#sc-status');
+    if (running) {
+      status.textContent = `Running · ${fmtDurFixed(sim.tick - startTick)} in · ${fmtDurFixed(Math.max(0, inc.end - sim.tick))} left`;
+      status.classList.remove('done');
+    } else {
+      const lasted = entry && entry.end !== null ? entry.end - startTick : sim.tick - startTick;
+      status.textContent = `${entry && entry.cancelled ? 'Ended by hand' : 'Ended'} after ${fmtDurFixed(lasted)}`;
+      status.classList.add('done');
+    }
+    $('#sc-end').hidden = !running;
+    const stats = $$('#sc-live .sc-stat');
+    def.live.forEach((item, i) => {
+      const el = stats[i];
+      if (!el) return;
+      el.querySelector('.k').textContent = item.label;
+      el.querySelector('.v').textContent = fmtLive(item, liveRaw(item));
+      el.querySelector('.d').textContent = `at start ${fmtLive(item, baseline[i])} · peak ${fmtLive(item, peak[i])}`;
+    });
+  }
+
+  function closeScenario() {
+    $('#scenario-box').hidden = true;
+    activeScenario = null;
+  }
+
+  $$('[data-scenario]').forEach(btn => btn.addEventListener('click', () => {
+    runScenario(btn.dataset.scenario);
+    renderIncidents();
+    if (!playing) render(true);
+  }));
+  $('#sc-close').addEventListener('click', closeScenario);
+  $('#sc-end').addEventListener('click', () => {
+    if (!activeScenario) return;
+    sim.cancelIncident(activeScenario.inc.id);
+    renderIncidents();
+    render(true);
+  });
+
   // transport
   const playBtn = $('#btn-play');
   function setPlaying(p) {
@@ -190,6 +337,8 @@
   $('#btn-step').addEventListener('click', () => { doTick(); render(true); });
   $('#btn-reset').addEventListener('click', () => {
     sim.reset(parseInt($('#seed').value, 10) || 0);
+    closeScenario();
+    scenarioIncidents.clear();
     particles = [];
     for (const c of Object.values(charts)) c.hoverIndex = null;
     resetRows();
@@ -991,6 +1140,7 @@
     if (playing && !force) tuneStride(now);
     if (!collapsedFor(stage)) drawStage();
     const rows = chartRows(sim.history);
+    lastRows = rows;
     // completeness: same horizon as the other charts
     const firstTick = sim.history.length ? sim.history[0].tick : sim.tick;
     const minutes = Math.floor((sim.tick - 1) / COHORT_TICKS) - Math.floor((firstTick - 1) / COHORT_TICKS) + 1;
@@ -1028,6 +1178,7 @@
     $('#inflight-p99').textContent = fmtDurFixed(f.inflight99);
     $('#inflight-total').textContent = fmt(inflightTotal);
     renderHistogramText();
+    renderScenario();
   }
 
   window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });

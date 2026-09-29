@@ -31,6 +31,19 @@
     <details class="panel" open>
       <summary><h2>Inject a delay</h2></summary>
       <p class="hint">Incidents start next tick and expire on their own. Stack as many as you like.</p>
+      <h3 class="subhead">Predefined outages</h3>
+      <p class="hint">Ready-made incidents, each with a walkthrough of what to watch for.</p>
+      <div class="incident scenario">
+        <div class="inc-name">Stuck workers</div>
+        <div class="inc-desc">0.3% of workers, lowest by index, stuck for 999 hours</div>
+        <button class="btn small" data-scenario="stuck">Run</button>
+      </div>
+      <div class="incident scenario">
+        <div class="inc-name">Slow tenth</div>
+        <div class="inc-desc">10% of workers at 10% speed for 48 hours</div>
+        <button class="btn small" data-scenario="slowTenth">Run</button>
+      </div>
+      <h3 class="subhead">Custom incidents</h3>
       <div class="incident">
         <div class="inc-name">Traffic spike</div>
         <label>× <input type="number" id="spike-mag" min="1" max="20" step="0.5" value="3"></label>
@@ -40,10 +53,10 @@
       <div class="incident">
         <div class="inc-name">Degraded workers</div>
         <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
-        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
+        <label>on <input type="number" id="degrade-pct" min="0.1" max="100" step="0.1" value="30">% of workers,
           <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
         <p class="warn" id="degrade-warning" hidden>Heads-up: routing is also lowest-index (first fit), so this degrades exactly the workers that receive most of the work. The impact will be far larger than the same share chosen at random. Fine if that is the point.</p>
-        <label>for <input type="number" id="degrade-dur" min="0.25" max="72" step="0.25" value="24"> hours</label>
+        <label>for <input type="number" id="degrade-dur" min="0.25" max="999" step="0.25" value="24"> hours</label>
         <button class="btn small" data-incident="degrade">Fire</button>
       </div>
       <div class="incident">
@@ -188,6 +201,33 @@
   </aside>
 
   <section class="viz">
+    <section id="scenario-box" class="scenario-box" role="region" aria-labelledby="sc-title" hidden>
+      <div class="sc-head">
+        <div class="sc-titles">
+          <span class="sc-kicker">Predefined outage</span>
+          <h2 id="sc-title"></h2>
+        </div>
+        <span class="sc-status" id="sc-status"></span>
+        <button type="button" class="sc-close" id="sc-close" title="Close this explanation (the outage keeps running)" aria-label="Close explanation">×</button>
+      </div>
+      <p class="sc-setup" id="sc-setup"></p>
+      <div class="sc-live" id="sc-live"></div>
+      <div class="sc-body">
+        <div>
+          <h3>What to watch</h3>
+          <ol id="sc-watch"></ol>
+        </div>
+        <div>
+          <h3>Why</h3>
+          <p id="sc-why"></p>
+        </div>
+      </div>
+      <div class="sc-foot">
+        <p id="sc-note"></p>
+        <button type="button" class="btn small" id="sc-end"></button>
+      </div>
+    </section>
+
     <div class="kpis">
       <div class="tile hero">
         <div class="label">Backlog</div>
@@ -384,8 +424,9 @@
         <li><b>Age of in-flight data</b> looks at every conversion that has arrived but not yet been written out (held upstream, waiting at the bundler, queued at the dispatcher, or inside a bundle being processed) and shows how old it is now, as a histogram by age and as P50/P90/P99 over time. Ages are grouped by arrival minute. Both histograms size their axis from the widest range needed in the last 12 simulated hours, so the axis grows at once but shrinks only slowly.</li>
         <li><b>Where in-flight data is</b> stacks the conversions not yet written out by stage: inside bundles being processed normally (a bundle counts in full until it completes), stuck behind a conversion-of-death stall, sitting on degraded or offline workers, queued at the dispatcher, buffered at the bundler, held upstream by a delay, and at the writer (buffered or finished but blocked on a worker). The top of the stack is the in-flight total; hover for each layer's share.</li>
         <li><b>Age percentiles of processed data</b> are the end-to-end ages of bundles at the moment they were written out, over a rolling one-hour window of completions.</li>
-        <li><b>Fresh time</b> slides a 5-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the five minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold.</li>
+        <li><b>Fresh time</b> slides a 5-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the five minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold. Arrival minutes older than 24 hours are kept only while some of their data is unwritten, so a bundle stuck for days keeps its window counting.</li>
         <li><b>Conversion of Death</b> tags, for its duration, an extra share of <i>arriving</i> conversions as expensive with a fixed cost you choose. The tag travels with the conversions through the bundler and any upstream hold, so it follows when data arrived rather than when it was bundled. They stack on top of the configured expensive conversions. Workers stalled on one are marked with a red dot; stalls on the configured expensive conversions are not marked.</li>
+        <li><b>Predefined outages</b> fire a ready-made incident and open a box above the KPIs that explains what was injected, what to watch for and why, with live readouts of the metrics that matter for that scenario. <i>Stuck workers</i> takes 0.3% of the pool (the lowest indices) offline for 999 hours; <i>Slow tenth</i> runs a random 10% of workers at 10% speed for 48 hours. Closing the box leaves the outage running; its button ends it early.</li>
         <li><b>Degraded workers</b> picks a share of the pool, either at random or the lowest-numbered workers, and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
         <li><b>Processing time distribution</b> bins the end-to-end time of every bundle completed in the last 12 hours and in the last 7 days, weighted by the conversions in each bundle and normalised to each window's own total, so the two shapes are comparable even though the 7-day set is far larger. Bin width adapts to the widest latency seen.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>

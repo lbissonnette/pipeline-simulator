@@ -562,3 +562,52 @@ test('expensive cost spread: per-conversion costs vary log-normally around the m
   const rm = resid.reduce((a, b) => a + b, 0) / resid.length;
   assert.ok(rm > 715 && rm < 740, `base ${rm}`);
 });
+
+test('stuck workers: unwritten minutes outlive the 24 h horizon, so P99 fresh time keeps climbing', () => {
+  // Predefined outage "Stuck workers": 0.3% of the pool, lowest by index, offline for 999 h.
+  const H = 360;
+  const sim = new Simulation({ seed: 42 });
+  run(sim, 2 * H);
+  const inc = sim.addIncident('degrade', { factor: 0, fraction: 0.003, selection: 'lowest' }, 999 * H);
+  assert.equal(inc.workers.length, 3);
+  assert.deepEqual(inc.workers, [0, 1, 2]);
+  run(sim, 30 * H);
+  // the three held bundles are still in flight, far past the 24 h cohort horizon
+  assert.equal(sim.last.degradedStuckItems, 3 * sim.config.bundleSize);
+  assert.ok(sim.last.fresh99 > 29 * H, `P99 fresh ${sim.last.fresh99 / H} h`);
+  assert.ok(sim.last.fresh90 < H, `P90 fresh ${sim.last.fresh90 / H} h`);
+  assert.ok(sim.inflightByAge().some(r => r.age > 29 * H), 'stuck data missing from in-flight ages');
+  // only the unwritten minutes and their neighbours are kept past the horizon
+  assert.ok(sim.cohorts.size < 24 * 60 + 60 + 40, `cohorts kept ${sim.cohorts.size}`);
+  invariants(sim);
+  // unstick: the held bundles are written, P99 fresh time falls back, old minutes are pruned
+  sim.cancelIncident(inc.id);
+  run(sim, 2 * H);
+  assert.equal(sim.last.degradedStuckItems, 0);
+  assert.ok(sim.last.fresh99 < 2 * H, `P99 fresh after ${sim.last.fresh99 / H} h`);
+  assert.ok(sim.cohorts.size <= 24 * 60 + 61, `cohorts kept ${sim.cohorts.size}`);
+  invariants(sim);
+});
+
+test('slow tenth: P90 fresh time climbs, then drops while the outage continues', () => {
+  // Predefined outage "Slow tenth": 10% of workers, chosen at random, at 10% speed for 48 h.
+  const H = 360;
+  const sim = new Simulation({ seed: 42 });
+  run(sim, 2 * H);
+  sim.addIncident('degrade', { factor: 0.1, fraction: 0.1, selection: 'random' }, 48 * H);
+  let peak90 = 0;
+  const lat = [];
+  for (let i = 0; i < 8 * H; i++) {
+    sim.step();
+    peak90 = Math.max(peak90, sim.last.fresh90);
+    lat.push(...sim.last.latencies);
+  }
+  assert.ok(peak90 > 1.5 * H, `P90 fresh peak ${peak90 / H} h`);
+  // hours later, same outage: P90 is back near normal, P99 still shows it
+  assert.ok(sim.last.fresh90 < H, `P90 fresh now ${sim.last.fresh90 / H} h`);
+  assert.ok(sim.last.fresh99 > 2 * H, `P99 fresh now ${sim.last.fresh99 / H} h`);
+  // end-to-end P90 of what was written never reached the slow bundles
+  lat.sort((a, b) => a - b);
+  assert.ok(lat[Math.floor(lat.length * 0.9)] < H, `P90 e2e ${lat[Math.floor(lat.length * 0.9)] / H} h`);
+  invariants(sim);
+});

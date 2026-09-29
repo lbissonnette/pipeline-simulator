@@ -190,7 +190,7 @@
   }
 
   const COHORT_TICKS = 6;          // ticks per arrival cohort (1 minute at 10 s/tick)
-  const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h)
+  const COHORT_HISTORY = 24 * 60;  // cohorts kept for the completeness view (24 h); older ones only while unwritten
   const FRESH_LEVELS = [50, 90, 99];
   const FRESH_WINDOW = 5;          // cohorts per fresh-time window (5 minutes)
   const cohortOf = tick => Math.floor((tick - 1) / COHORT_TICKS);
@@ -408,9 +408,25 @@
       stat.arrived += n;
     }
 
+    // Drop cohorts older than COHORT_HISTORY, except those with conversions
+    // still unwritten (a bundle stuck on a worker for days must keep counting
+    // against fresh time and in-flight age) and their neighbours within a
+    // fresh-time window, so the windows around them read true. Keys are
+    // inserted in ascending order, so the scan stops at the cutoff.
     pruneCohorts(newest) {
       if (this.cohorts.size <= COHORT_HISTORY + 60) return;
-      for (const k of this.cohorts.keys()) { if (k < newest - COHORT_HISTORY) this.cohorts.delete(k); }
+      const cutoff = newest - COHORT_HISTORY;
+      const keep = new Set();
+      for (const [k, s] of this.cohorts) {
+        if (k >= cutoff) break;
+        if (s.arrived - Math.min(s.processed, s.arrived) > 0.5) {
+          for (let j = k - FRESH_WINDOW + 1; j < k + FRESH_WINDOW; j++) keep.add(j);
+        }
+      }
+      for (const k of this.cohorts.keys()) {
+        if (k >= cutoff) break;
+        if (!keep.has(k)) this.cohorts.delete(k);
+      }
     }
 
     // Take `size` conversions from the front of the intake buffer as a bundle.
@@ -548,12 +564,27 @@
       levels = levels || FRESH_LEVELS;
       windowCohorts = windowCohorts || FRESH_WINDOW;
       const now = cohortOf(Math.max(1, this.tick));
-      const oldest = Math.max(0, now - COHORT_HISTORY + 1);
+      const recent = Math.max(0, now - COHORT_HISTORY + 1);
+      // Cohorts kept from before the 24 h horizon (still unwritten, plus
+      // their neighbours) come first, then every minute of the last 24 h.
+      // A missing cohort counts as empty, as in the last 24 h; a pruned one
+      // was complete and has no unwritten cohort within a window of it, so
+      // only windows that read 100% anyway change. Long gaps are skipped.
+      const order = [];
+      for (const k of this.cohorts.keys()) { if (k >= recent) break; order.push(k); }
+      for (let c = recent; c <= now; c++) order.push(c);
       const result = {};
       const pending = new Set(levels);
       let sa = 0, sp = 0;
       const q = [];
-      for (let c = oldest; c <= now && pending.size; c++) {
+      for (let i = 0; i < order.length && pending.size; i++) {
+        const c = order[i];
+        const gap = i > 0 ? c - order[i - 1] - 1 : 0;
+        if (gap >= windowCohorts) { q.length = 0; sa = 0; sp = 0; }
+        for (let m = 0; m < gap && q.length; m++) {
+          q.push([0, 0]);
+          if (q.length > windowCohorts) { const [da, dp] = q.shift(); sa -= da; sp -= dp; }
+        }
         const s = this.cohorts.get(c);
         const a = s ? s.arrived : 0, p = s ? Math.min(s.processed, a) : 0;
         q.push([a, p]); sa += a; sp += p;

@@ -61,6 +61,15 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 - **PDF / CDF** – both distribution charts toggle between the share per bin
   (PDF) and the cumulative share at or below each value (CDF); remembered per
   chart.
+- **Predefined outages** – two ready-made incidents, each of which opens a box
+  above the KPIs explaining what was injected, what to watch for and why,
+  with live readouts (now, at start, peak) of the metrics the story is about.
+  *Stuck workers* takes 0.3% of the pool, the lowest by index, offline for
+  999 hours: P99 fresh time climbs indefinitely while everything else looks
+  normal. *Slow tenth* runs a random 10% of workers at 10% speed for 48 hours:
+  P90 fresh time climbs, then drops a few hours in although nothing has
+  changed, and P90 end-to-end never moves. Closing the box leaves the outage
+  running; its button ends it early.
 - **Incident markers** – time charts shade each incident's active period with
   start and end lines; an × marks one that was switched off by hand.
 - **Tour** – a short guided tour opens on the first visit: time controls, the
@@ -87,6 +96,7 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
 | | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N hours. |
+| | Predefined outages | *Stuck workers* (0.3%, lowest by index, offline 999 h) and *Slow tenth* (10% at random, rate × 0.1, 48 h), each with an explanation box. |
 | | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N hours (default 24). A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
 | | Conversion of Death | For N hours, an extra share of arriving conversions are expensive at a fixed cost you choose, on top of the configured ones (default 24 h). The tag follows arrival time through the bundler and any upstream hold. |
 | | Upstream delay | Hold arrivals for N hours, then release them all at once. |
@@ -146,7 +156,10 @@ One tick is 10 seconds. The model itself is unitless; the UI applies the scale.
 9. **Arrival cohorts**: every conversion is tagged with the minute it arrived
    in, through the intake buffer (and the upstream-delay hold) into its bundle.
    A bundle is written out atomically, so its cohorts are credited only when
-   the whole bundle completes. `Simulation#completeness(n)`
+   the whole bundle completes. Minutes are kept for 24 hours; older ones stay
+   only while some of their conversions are unwritten (plus their neighbours
+   within a fresh-time window), so a bundle stuck for days keeps counting
+   against fresh time and in-flight age. `Simulation#completeness(n)`
    returns the last `n` minutes as `{ tick, arrived, processed, pct }`, which
    is what the completeness chart plots. `Simulation#freshTimes(levels,
    windowCohorts)` returns the fresh time in ticks per level (default levels
@@ -172,7 +185,8 @@ npm start       # serve locally
 - `js/tour.js` – the first-visit guided tour and its replay button.
 - `test/sim.test.js` – conservation, dispatcher bound, one bundle per worker,
   determinism, stability under/over load, incidents, distribution means,
-  per-minute completeness, fresh-time percentiles, completion retention.
+  per-minute completeness, fresh-time percentiles, completion retention, and
+  the two predefined outages.
 
 A GitHub Pages workflow (`.github/workflows/pages.yml`) runs the tests and
 publishes the site from `main`. It stamps the commit hash onto the script and
