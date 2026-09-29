@@ -64,7 +64,9 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 - **Incident markers** – time charts shade each incident's active period with
   start and end lines; an × marks one that was switched off by hand.
 - **Layout** – each chart card has a Hide button (collapses to its title) and a
-  grip to drag it up or down; the arrangement is remembered per browser.
+  grip to drag it up or down; the arrangement is remembered per browser. The
+  two in-flight age charts start hidden. The parameter panels collapse too;
+  only *Inject a delay* (at the top) starts open.
 
 ## Knobs
 
@@ -81,8 +83,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
 | | Mean / std. deviation | Conversions a worker completes per tick (default 10 ± 2.5). Samples are clamped at zero. Per-tick noise averages out over a bundle, so this barely affects end-to-end spread. |
 | | Expensive conversions | Share of conversions that are expensive (default 0.15%, about 1.8 per bundle), and the mean and spread of each one's extra cost (default 2 ± 3 min, log-normal, each stall capped at 4 h). A bundle with k of them stalls for the sum of their costs. This is what spreads end-to-end times; workers are identical. |
 | Incidents | Traffic spike | Multiply arrivals for N hours. |
-| | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N hours. A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
-| | Conversion of Death | For N hours, an extra share of arriving conversions are expensive at a fixed cost you choose, on top of the configured ones. The tag follows arrival time through the bundler and any upstream hold. |
+| | Degraded workers | Multiply the rate of a percentage of workers, chosen at random (default) or the lowest by index, for N hours (default 24). A warning appears when both this and the dispatcher target the lowest indices. A multiplier of 0 takes them offline (idle routing skips them); overlapping incidents multiply. |
+| | Conversion of Death | For N hours, an extra share of arriving conversions are expensive at a fixed cost you choose, on top of the configured ones (default 24 h). The tag follows arrival time through the bundler and any upstream hold. |
 | | Upstream delay | Hold arrivals for N hours, then release them all at once. |
 | Advanced | Workers | Pool size (default 1,024, a 32 × 32 grid); can be changed live. |
 | | Bundle size | Conversions per bundle (default 1,200, so the work itself takes ~20 min at 10 per tick). |

@@ -27,8 +27,41 @@
 
 <main class="layout">
   <aside class="controls" aria-label="Parameters">
-    <section class="panel">
-      <h2>Incoming load</h2>
+    <details class="panel" open>
+      <summary><h2>Inject a delay</h2></summary>
+      <p class="hint">Incidents start next tick and expire on their own. Stack as many as you like.</p>
+      <div class="incident">
+        <div class="inc-name">Traffic spike</div>
+        <label>× <input type="number" id="spike-mag" min="1" max="20" step="0.5" value="3"></label>
+        <label>for <input type="number" id="spike-dur" min="0.25" max="72" step="0.25" value="0.5"> hours</label>
+        <button class="btn small" data-incident="spike">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Degraded workers</div>
+        <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
+        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
+          <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
+        <p class="warn" id="degrade-warning" hidden>Heads-up: routing is also lowest-index (first fit), so this degrades exactly the workers that receive most of the work. The impact will be far larger than the same share chosen at random. Fine if that is the point.</p>
+        <label>for <input type="number" id="degrade-dur" min="0.25" max="72" step="0.25" value="24"> hours</label>
+        <button class="btn small" data-incident="degrade">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Conversion of Death</div>
+        <label>an extra <input type="number" id="poison-share" min="0.001" max="10" step="0.001" value="0.05">% of conversions</label>
+        <label>each costing <input type="number" id="poison-cost" min="1" max="240" step="1" value="30"> min</label>
+        <label>for <input type="number" id="poison-dur" min="0.25" max="72" step="0.25" value="24"> hours</label>
+        <button class="btn small" data-incident="poison">Fire</button>
+      </div>
+      <div class="incident">
+        <div class="inc-name">Upstream delay</div>
+        <label class="wide">hold arrivals for <input type="number" id="delay-dur" min="0.25" max="72" step="0.25" value="0.75"> hours, then release</label>
+        <button class="btn small" data-incident="upstreamDelay">Fire</button>
+      </div>
+      <ul id="active-incidents" class="active-incidents" aria-live="polite"></ul>
+    </details>
+
+    <details class="panel">
+      <summary><h2>Incoming load</h2></summary>
       <label class="field">
         <span class="lbl">Arrival rate <output data-out="arrivalRate">5,200</output> <small>conversions / tick · <span id="arrival-rate-s">520</span> / s</small></span>
         <input type="range" data-param="arrivalRate" min="0" max="30000" step="50" value="5200">
@@ -37,10 +70,10 @@
         <span class="lbl">Daily traffic wave <output data-out="waveAmplitude">0%</output> <small>± around the mean over 24 h</small></span>
         <input type="range" data-param="waveAmplitude" min="0" max="1" step="0.05" value="0">
       </label>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Dispatcher</h2>
+    <details class="panel">
+      <summary><h2>Dispatcher</h2></summary>
       <p class="hint">Bundles wait here for an idle worker. When the queue is full the bundler stops cutting bundles and conversions pile up upstream.</p>
       <label class="field">
         <span class="lbl">Queue capacity <output data-out="dispatcherCapacity">1,024</output> <small>bundles</small></span>
@@ -55,10 +88,10 @@
           <option value="sticky">Sticky partition (bundle waits for its worker)</option>
         </select>
       </label>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Writer</h2>
+    <details class="panel">
+      <summary><h2>Writer</h2></summary>
       <p class="hint">Finished bundles wait in a buffer to be written out; a bundle only counts as complete once fully written. When the buffer is full, workers holding finished bundles are blocked until a slot frees.</p>
       <label class="field">
         <span class="lbl">Write rate <output data-out="writeRate">9,000 / tick</output> <small>conversions per tick · <span id="write-rate-s">900</span> / s</small></span>
@@ -76,10 +109,10 @@
           <option value="random">Random blocked worker</option>
         </select>
       </label>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Processing rate per worker</h2>
+    <details class="panel">
+      <summary><h2>Processing rate per worker</h2></summary>
       <p class="hint">Each tick a busy worker completes this many conversions of its bundle, drawn fresh from the distribution. Each worker holds one bundle at a time.</p>
       <label class="field">
         <span class="lbl">Distribution</span>
@@ -129,42 +162,9 @@
       <div class="capacity-line">
         A bundle takes <b id="bundle-ticks">24m</b> on average · capacity <b id="capacity">8,644</b> conversions / tick · load ratio ρ <b id="rho">0.60</b>
       </div>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Inject a delay</h2>
-      <p class="hint">Incidents start next tick and expire on their own. Stack as many as you like.</p>
-      <div class="incident">
-        <div class="inc-name">Traffic spike</div>
-        <label>× <input type="number" id="spike-mag" min="1" max="20" step="0.5" value="3"></label>
-        <label>for <input type="number" id="spike-dur" min="0.25" max="72" step="0.25" value="0.5"> hours</label>
-        <button class="btn small" data-incident="spike">Fire</button>
-      </div>
-      <div class="incident">
-        <div class="inc-name">Degraded workers</div>
-        <label>rate × <input type="number" id="degrade-rate" min="0" max="1" step="0.05" value="0.25"> <small>(0 = offline)</small></label>
-        <label>on <input type="number" id="degrade-pct" min="1" max="100" step="1" value="30">% of workers,
-          <select id="degrade-sel"><option value="random">chosen at random</option><option value="lowest">lowest by index</option></select></label>
-        <p class="warn" id="degrade-warning" hidden>Heads-up: routing is also lowest-index (first fit), so this degrades exactly the workers that receive most of the work. The impact will be far larger than the same share chosen at random. Fine if that is the point.</p>
-        <label>for <input type="number" id="degrade-dur" min="0.25" max="72" step="0.25" value="1"> hours</label>
-        <button class="btn small" data-incident="degrade">Fire</button>
-      </div>
-      <div class="incident">
-        <div class="inc-name">Conversion of Death</div>
-        <label>an extra <input type="number" id="poison-share" min="0.001" max="10" step="0.001" value="0.05">% of conversions</label>
-        <label>each costing <input type="number" id="poison-cost" min="1" max="240" step="1" value="30"> min</label>
-        <label>for <input type="number" id="poison-dur" min="0.25" max="72" step="0.25" value="0.5"> hours</label>
-        <button class="btn small" data-incident="poison">Fire</button>
-      </div>
-      <div class="incident">
-        <div class="inc-name">Upstream delay</div>
-        <label class="wide">hold arrivals for <input type="number" id="delay-dur" min="0.25" max="72" step="0.25" value="0.75"> hours, then release</label>
-        <button class="btn small" data-incident="upstreamDelay">Fire</button>
-      </div>
-      <ul id="active-incidents" class="active-incidents" aria-live="polite"></ul>
-    </section>
-
-    <details class="panel advanced">
+    <details class="panel">
       <summary><h2>Advanced</h2></summary>
       <label class="field">
         <span class="lbl">Workers <output data-out="workers">1,024</output> <small>a square number gives a square grid</small></span>
@@ -271,7 +271,7 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-fresh"></canvas></div>
       </div>
-      <div class="card wide">
+      <div class="card wide" data-default-hidden>
         <div class="card-head"><h2>Age of in-flight data</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>% of conversions not yet written out, by age</span>
@@ -281,7 +281,7 @@
         </div>
         <div class="chart-wrap"><canvas id="chart-inflight-hist"></canvas></div>
       </div>
-      <div class="card wide">
+      <div class="card wide" data-default-hidden>
         <div class="card-head"><h2>Age percentiles of in-flight data</h2>
           <div class="legend">
             <span class="lg-item"><i class="sw s1"></i>P50</span>
@@ -370,7 +370,7 @@
         <li><b>Time</b>: one tick is 10 seconds. Charts keep the last 12 hours.</li>
         <li><b>PDF / CDF</b>: the two distribution charts can show either the share of conversions in each bin (PDF, the histogram) or the cumulative share at or below each value (CDF, rising to 100%). The choice is remembered per chart.</li>
         <li><b>Incident markers</b>: every time chart shades the period an incident was active, with a vertical line where it started and where it ended. An × on the end line means it was switched off by hand rather than expiring. Colours follow the incident type: orange for traffic spikes, red for degraded workers and outages, magenta for conversions of death, yellow for upstream holds.</li>
-        <li><b>Layout</b>: every chart card has a Hide button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The arrangement is remembered in this browser.</li>
+        <li><b>Layout</b>: every chart card has a Hide/Show button that collapses it to its title, and a grip (⋮⋮) to drag it above or below other charts. The two in-flight age charts start hidden. The arrangement is remembered in this browser. The parameter panels on the left collapse too; only <i>Inject a delay</i> starts open.</li>
         <li><b>Arrivals</b> per tick are Poisson with the mean you set (optionally modulated by a 24-hour sine wave). An <i>upstream delay</i> holds arrivals in a buffer and releases them all at once when it ends.</li>
         <li><b>Bundling</b> cuts a bundle whenever the intake buffer holds a full bundle's worth and the dispatcher has room; a partial bundle is flushed after the configured wait. When the dispatcher is full the bundler stops, and conversions accumulate in its buffer.</li>
         <li><b>Dispatcher</b>: a bounded FIFO of bundles. Each tick it hands bundles to idle workers. <i>Any idle worker</i> and <i>round robin</i> only use online workers; <i>sticky partition</i> assigns each bundle a worker up front and waits for that worker, even if it is busy or offline, like a static partition assignment. <i>Lowest idle index</i> is first-fit: work concentrates on the lowest-numbered workers and the highest-numbered ones stay idle while there is spare capacity.</li>

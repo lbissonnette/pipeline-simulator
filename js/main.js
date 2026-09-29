@@ -1031,6 +1031,8 @@
   }
 
   window.addEventListener('resize', () => { geom = null; drawDistribution(); render(true); });
+  // the preview canvas has no width while its panel is collapsed
+  distCanvas.closest('details').addEventListener('toggle', e => { if (e.target.open) drawDistribution(); });
   if (window.matchMedia) {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { window.invalidateChartTheme(); buildRamp(); drawDistribution(); render(true); });
   }
@@ -1038,8 +1040,12 @@
   // ---------- card controls: hide/show and drag to reorder ----------
   // Every chart card gets a grip and a Hide button in its header. Collapsed
   // cards keep only their title, and their charts are skipped by the render
-  // loop. Order and hidden state persist per browser in localStorage.
-  const STORE_ORDER = 'pipeline-sim.card-order', STORE_HIDDEN = 'pipeline-sim.card-hidden';
+  // loop. Order and hidden state persist per browser in localStorage; cards
+  // marked data-default-hidden start collapsed until the user shows them.
+  // The order key is versioned so a change to the default layout reaches
+  // browsers that saved an older arrangement.
+  const STORE_ORDER = 'pipeline-sim.card-order.v2', STORE_VIS = 'pipeline-sim.card-visibility';
+  const STORE_HIDDEN_V1 = 'pipeline-sim.card-hidden';
   const store = {
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
@@ -1057,9 +1063,9 @@
     card.classList.toggle('collapsed', on);
     const btn = card.querySelector('.btn.toggle');
     if (btn) { btn.textContent = on ? 'Show' : 'Hide'; btn.setAttribute('aria-expanded', String(!on)); }
-    const hidden = new Set(store.get(STORE_HIDDEN) || []);
-    if (on) hidden.add(cardId(card)); else hidden.delete(cardId(card));
-    store.set(STORE_HIDDEN, [...hidden]);
+    const vis = store.get(STORE_VIS) || {};
+    vis[cardId(card)] = on ? 'hidden' : 'shown';
+    store.set(STORE_VIS, vis);
     if (!on) { geom = null; render(true); }
   }
   function saveOrder() {
@@ -1119,19 +1125,34 @@
     window.addEventListener('pointercancel', end);
   }
   function initCards() {
-    // restore order
+    // restore order; a card missing from the saved order (added since it was
+    // saved) keeps its default place after the card it follows in the markup
     const order = store.get(STORE_ORDER);
     if (Array.isArray(order)) {
-      const byId = new Map([...chartGrid.querySelectorAll(':scope > .card')].map(c => [cardId(c), c]));
-      for (const id of order) { const c = byId.get(id); if (c) chartGrid.appendChild(c); }
+      const cards = [...chartGrid.querySelectorAll(':scope > .card')];
+      const byId = new Map(cards.map(c => [cardId(c), c]));
+      const placed = order.filter(id => byId.has(id));
+      cards.forEach((c, i) => {
+        if (placed.includes(cardId(c))) return;
+        const prev = i > 0 ? placed.indexOf(cardId(cards[i - 1])) : -1;
+        placed.splice(prev + 1, 0, cardId(c));
+      });
+      for (const id of placed) chartGrid.appendChild(byId.get(id));
     }
     for (const card of chartGrid.querySelectorAll(':scope > .card')) setupCard(card, true);
     const stageCard = $('.stage-card');
     stageCard.dataset.card = 'stage';
     setupCard(stageCard, false);
-    const hidden = new Set(store.get(STORE_HIDDEN) || []);
+    let vis = store.get(STORE_VIS);
+    if (!vis) {
+      // carry over cards hidden under the old list-of-hidden-ids format
+      vis = {};
+      for (const id of store.get(STORE_HIDDEN_V1) || []) vis[id] = 'hidden';
+      store.set(STORE_VIS, vis);
+    }
     for (const card of document.querySelectorAll('.card')) {
-      if (hidden.has(cardId(card))) {
+      const state = vis[cardId(card)] || ('defaultHidden' in card.dataset ? 'hidden' : 'shown');
+      if (state === 'hidden') {
         card.classList.add('collapsed');
         const btn = card.querySelector('.btn.toggle');
         if (btn) { btn.textContent = 'Show'; btn.setAttribute('aria-expanded', 'false'); }

@@ -239,11 +239,12 @@ body.reordering { cursor: grabbing; user-select: none; }
 .notes li { margin: 4px 0; }
 .notes b { color: var(--text); }
 
-details.advanced summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
-details.advanced summary::-webkit-details-marker { display: none; }
-details.advanced summary::before { content: "▸"; color: var(--text-muted); font-size: 12px; }
-details.advanced[open] summary::before { content: "▾"; }
-details.advanced summary h2 { display: inline; }
+details.panel summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.panel summary::-webkit-details-marker { display: none; }
+details.panel summary::before { content: "▸"; color: var(--text-muted); font-size: 12px; }
+details.panel[open] summary::before { content: "▾"; }
+details.panel summary h2 { display: inline; }
+details.panel:not([open]) { gap: 0; }
 .tile .value.warn { color: var(--critical); }
 .tick-small { color: var(--text-muted); margin-left: 6px; }
 /* fixed-width slots for live numbers so surrounding text never shifts */
