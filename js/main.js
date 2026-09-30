@@ -191,14 +191,17 @@
       setup: c => `<b>${fmtInt(c.affected)}</b> of the ${fmtInt(c.pool)} workers (0.3%, the lowest by index) freeze for <b>999 hours</b>. Each keeps the bundle it was working on, and the dispatcher routes new work around them. <b>Impact is low</b>: only the bundles they were holding are held back, a small amount of data loss until the workers come back.`,
       watch: c => [
         '<b>P99 fresh time climbs by an hour every hour</b>, indefinitely, until the outage clears. P50 and P90 fresh time don’t move.',
+        '<b>P99 in-flight age stays under an hour</b>, although the held data is getting older by the hour too.',
         `<b>Backlog, throughput and processed age look normal.</b> The other ${fmtInt(c.pool - c.affected)} workers take the load without noticing.`,
         '<b>Unstick the workers</b> (the button below, or × on the incident). The held bundles are written out hours late, and P99 fresh time falls back at once.',
         '<b>The P99 processed-age graph usually misses even that.</b> A few late bundles are far less than 1% of the bundles written in an hour, so P99 processed age barely moves. Only the tail of the processing-time histogram shows them.',
       ],
-      why: 'Under first-fit routing the lowest-numbered workers are always busy, so each one is holding a bundle when it freezes. Fresh time is measured by arrival minute: the minutes those bundles came from can never be fully written, so the 5-minute window around them stays below 99% complete and simply gets older. Processed-age percentiles count only data that has been written, so data that never finishes is invisible to them.',
+      whyTitle: 'Why does P99 fresh time increase while P99 in-flight age doesn’t?',
+      why: 'The two P99s are taken over different populations. P99 fresh time judges each 5-minute window of arrivals on its own: a window passes once 99% of the conversions that arrived in it are written out, and the P99 fresh time is the age of the oldest window that hasn’t. The held bundles all come from a few arrival minutes, so when they add up to more than 1% of one window’s arrivals, that window can never pass, and its age grows by an hour every hour. P99 in-flight age pools every conversion not yet written, from every arrival minute, and asks how old the oldest 1% of them are. The held conversions are a few thousand out of hundreds of thousands in flight at any moment, well under 1%, so the 99th percentile still lands on ordinary data that arrived less than an hour ago. The held data sits in the in-flight tail, beyond the 99% mark. Fresh time counts the missing data as a share of its own window, where it is concentrated; in-flight age counts it as a share of everything in flight, where it is diluted.',
       note: 'Your simulation may vary. One stuck bundle is under 1% of a 5-minute window of arrivals, so P99 climbs only when two of them arrived close together, which happens in most runs. If P99 fresh time stays flat, Reset and run it again, or try another seed.',
       live: [
         { label: 'P99 fresh time', row: 'fresh99Hr' },
+        { label: 'P99 in-flight age', row: 'inflight99Hr' },
         { label: 'P90 fresh time', row: 'fresh90Hr' },
         { label: 'P99 processed age', row: 'latP99Hr' },
         { label: 'Conversions held', snap: 'degradedStuckItems' },
@@ -253,6 +256,7 @@
     $('#sc-title').textContent = def.name;
     $('#sc-setup').innerHTML = def.setup(ctx);
     $('#sc-watch').innerHTML = def.watch(ctx).map(t => `<li>${t}</li>`).join('');
+    $('#sc-why-title').textContent = def.whyTitle || 'Why';
     $('#sc-why').textContent = def.why;
     const changed = changedSettings();
     $('#sc-note').textContent = def.note + (changed.length

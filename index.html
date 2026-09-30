@@ -218,7 +218,7 @@
           <ol id="sc-watch"></ol>
         </div>
         <div>
-          <h3>Why</h3>
+          <h3 id="sc-why-title">Why</h3>
           <p id="sc-why"></p>
         </div>
       </div>
@@ -426,7 +426,7 @@
         <li><b>Age percentiles of processed data</b> are the end-to-end ages of bundles at the moment they were written out, over a rolling one-hour window of completions.</li>
         <li><b>Fresh time</b> slides a 5-minute window over the arrival minutes and measures each window's completeness (processed ÷ arrived across the five minutes). Scanning from oldest to newest, the P99 fresh time is the age of the oldest window that is still below 99% complete; P90 and P50 use 90% and 50%. Age is counted from the start of the window's oldest minute. It is recomputed every simulated minute and plotted over time; 0 means every window has already passed that threshold. Arrival minutes older than 24 hours are kept only while some of their data is unwritten, so a bundle stuck for days keeps its window counting.</li>
         <li><b>Conversion of Death</b> tags, for its duration, an extra share of <i>arriving</i> conversions as expensive with a fixed cost you choose. The tag travels with the conversions through the bundler and any upstream hold, so it follows when data arrived rather than when it was bundled. They stack on top of the configured expensive conversions. Workers stalled on one are marked with a red dot; stalls on the configured expensive conversions are not marked.</li>
-        <li><b>Predefined outages</b> fire a ready-made incident and open a box above the KPIs that explains what was injected, what to watch for and why, with live readouts of the metrics that matter for that scenario. <i>Stuck workers</i> takes 0.3% of the pool (the lowest indices) offline for 999 hours; <i>Slow tenth</i> runs a random 10% of workers at 10% speed for 48 hours. Closing the box leaves the outage running; its button ends it early.</li>
+        <li><b>Predefined outages</b> fire a ready-made incident and open a box above the KPIs that explains what was injected, what to watch for and why, with live readouts of the metrics that matter for that scenario. <i>Stuck workers</i> takes 0.3% of the pool (the lowest indices) offline for 999 hours, and shows why P99 fresh time climbs while P99 in-flight age doesn’t; <i>Slow tenth</i> runs a random 10% of workers at 10% speed for 48 hours. Closing the box leaves the outage running; its button ends it early.</li>
         <li><b>Degraded workers</b> picks a share of the pool, either at random or the lowest-numbered workers, and multiplies their rate for the duration. A multiplier of 0 takes them offline: they stop processing, keep whatever bundle they hold, and idle routing skips them. Any other multiplier slows them while they keep accepting work. Overlapping incidents multiply.</li>
         <li><b>Processing time distribution</b> bins the end-to-end time of every bundle completed in the last 12 hours and in the last 7 days, weighted by the conversions in each bundle and normalised to each window's own total, so the two shapes are comparable even though the 7-day set is far larger. Bin width adapts to the widest latency seen.</li>
         <li><b>Latency</b> is measured per bundle from the tick its oldest conversion arrived to the tick the bundle finished, so it includes time spent filling the bundle, waiting at the bundler and in the dispatcher, and being processed.</li>

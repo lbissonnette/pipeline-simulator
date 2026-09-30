@@ -65,8 +65,8 @@ Live: <https://lbissonnette.github.io/pipeline-simulator/>
   above the KPIs explaining what was injected, what to watch for and why,
   with live readouts (now, at start, peak) of the metrics the story is about.
   *Stuck workers* takes 0.3% of the pool, the lowest by index, offline for
-  999 hours: P99 fresh time climbs indefinitely while everything else looks
-  normal. *Slow tenth* runs a random 10% of workers at 10% speed for 48 hours:
+  999 hours: P99 fresh time climbs indefinitely while everything else,
+  P99 in-flight age included, looks normal. *Slow tenth* runs a random 10% of workers at 10% speed for 48 hours:
   P90 fresh time climbs, then drops a few hours in although nothing has
   changed, and P90 end-to-end never moves. Closing the box leaves the outage
   running; its button ends it early.

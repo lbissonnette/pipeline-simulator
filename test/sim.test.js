@@ -577,6 +577,8 @@ test('stuck workers: unwritten minutes outlive the 24 h horizon, so P99 fresh ti
   assert.ok(sim.last.fresh99 > 29 * H, `P99 fresh ${sim.last.fresh99 / H} h`);
   assert.ok(sim.last.fresh90 < H, `P90 fresh ${sim.last.fresh90 / H} h`);
   assert.ok(sim.inflightByAge().some(r => r.age > 29 * H), 'stuck data missing from in-flight ages');
+  // ... yet it is well under 1% of everything in flight, so P99 in-flight age stays low
+  assert.ok(sim.last.inflight99 < H, `P99 in-flight ${sim.last.inflight99 / H} h`);
   // only the unwritten minutes and their neighbours are kept past the horizon
   assert.ok(sim.cohorts.size < 24 * 60 + 60 + 40, `cohorts kept ${sim.cohorts.size}`);
   invariants(sim);
